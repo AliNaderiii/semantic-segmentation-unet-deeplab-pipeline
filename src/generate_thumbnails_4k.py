@@ -1,5 +1,5 @@
 """
-Generate 4K professional thumbnails for Upwork portfolio
+Generate 4K professional thumbnails for  portfolio
 Semantic Segmentation - VOC 2012
 3840x2160, 300 DPI
 """
