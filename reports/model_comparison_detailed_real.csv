@@ -1,0 +1,7 @@
+Model,mIoU,Dice,Params_M,Inference_ms,Type
+U-Net R18 Ours Real,0.5634,0.7049,14.3,38,Real Ours
+U-Net R34,0.65,0.78,24.4,45,Est.
+DeepLabV3+ R50,0.72,0.84,42.0,78,Est.
+FPN R34,0.68,0.8,23.2,50,Est.
+SegFormer B2,0.75,0.86,27.0,62,Est.
+DeepLabV3+ SOTA VOC,0.82,0.9,42.0,78,SOTA
