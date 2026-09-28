@@ -1,0 +1,41 @@
+# Data - large, download via torchvision or script
+data/
+VOCtrainval_*.tar
+VOCdevkit/
+*.tar
+*.zip
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.env
+.venv
+venv/
+.ipynb_checkpoints/
+.pytest_cache/
+.mypy_cache/
+
+# Models - large, use Git LFS or releases
+# Keep small history json, ignore large pth
+models/*.pth
+models/*.pkl
+# Uncomment to include best model (55MB, under 100MB limit):
+# !models/best_unet.pth
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+reports/archive/
+wandb/
+lightning_logs/
+
+# IDE
+.vscode/
+.idea/

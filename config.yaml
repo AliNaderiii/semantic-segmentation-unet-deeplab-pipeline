@@ -1,0 +1,35 @@
+# Semantic Segmentation Config - Real VOC 2012
+dataset:
+  name: "pascal_voc_2012"
+  root: "./data"
+  num_samples: 80  # 400 for full, 2913 for complete
+  img_size: 128    # 256 for full
+  num_classes: 2   # 2 binary, 21 multi-class
+
+model:
+  name: "unet"  # unet, deeplabv3plus, segformer, fpn
+  encoder: "resnet18"  # resnet18, resnet34, resnet50, mit_b2
+  pretrained: true
+  num_classes: 2
+
+training:
+  batch_size: 4
+  epochs: 3  # 15 for full
+  lr: 1.0e-4
+  optimizer: "adam"
+  scheduler: "ReduceLROnPlateau"
+  scheduler_patience: 3
+  scheduler_factor: 0.5
+  loss_dice_weight: 0.5
+  loss_ce_weight: 0.5
+  early_stopping_patience: 10
+
+augmentation:
+  hflip: 0.5
+  brightness_contrast: 0.3
+  shift_scale_rotate: 0.3
+
+deployment:
+  host: "0.0.0.0"
+  port: 8000
+  inference_size: 256
