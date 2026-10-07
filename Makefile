@@ -1,28 +1,41 @@
-.PHONY: install train eval inference docker clean
+.PHONY: install install-dev download train smoke-test evaluate serve benchmark test lint docker-build docker-run clean
 
 install:
+	@echo "Install a matching torch/torchvision build first; see README.md."
 	pip install -r requirements.txt
-	pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+
+install-dev:
+	pip install -r requirements-dev.txt
+
+download:
+	python -m src.download_data
 
 train:
-	python src/train.py --config config.yaml
+	python -m src.train --config config.yaml
 
-eval:
-	python src/evaluate.py --config config.yaml
+smoke-test:
+	python -m src.train --config config.yaml --smoke-test
 
-inference:
-	uvicorn src.inference:app --host 0.0.0.0 --port 8000 --reload
+evaluate:
+	python -m src.evaluate --config config.yaml --checkpoint checkpoints/best.pt
 
-docker-build:
-	docker build -t semantic-seg-pipeline .
+serve:
+	uvicorn src.inference:app --host 0.0.0.0 --port 8000
 
-docker-run:
-	docker run -p 8000:8000 semantic-seg-pipeline
+benchmark:
+	python -m src.benchmark --model unet --encoder resnet18
 
-clean:
-	find . -type d -name "__pycache__" -exec rm -rf {} +
-	find . -type f -name "*.pyc" -delete
-	rm -rf .pytest_cache
+test:
+	pytest
 
 lint:
-	python -m flake8 src/ --max-line-length=100
+	ruff check src tests
+
+docker-build:
+	docker build -t semantic-segmentation-pipeline .
+
+docker-run:
+	docker run --rm -p 8000:8000 -v "$(PWD)/checkpoints:/app/checkpoints:ro" semantic-segmentation-pipeline
+
+clean:
+	rm -rf .pytest_cache .ruff_cache **/__pycache__ reports/evaluation_metrics.json

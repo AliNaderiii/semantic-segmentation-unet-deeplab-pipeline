@@ -1,138 +1,122 @@
-"""
-Real Dataset Loader - Pascal VOC 2012 Segmentation + Crack Segmentation
-Leakage-safe, professional, 100% real public datasets.
-"""
+"""Pascal VOC 2012 datasets and loaders with correct treatment of void labels."""
+from __future__ import annotations
 
-import os
-import torch
-from torch.utils.data import Dataset, DataLoader
-from torchvision.datasets import VOCSegmentation
-from torchvision import transforms
-from PIL import Image
-import numpy as np
-import albumentations as A
-from albumentations.pytorch import ToTensorV2
-import cv2
 from pathlib import Path
+from typing import Literal
 
-# VOC classes - 20 + background
-VOC_CLASSES = [
-    'background', 'aeroplane', 'bicycle', 'bird', 'boat', 'bottle',
-    'bus', 'car', 'cat', 'chair', 'cow', 'diningtable', 'dog',
-    'horse', 'motorbike', 'person', 'pottedplant', 'sheep', 'sofa',
-    'train', 'tvmonitor'
-]
+import albumentations as A
+import numpy as np
+import torch
+from albumentations.pytorch import ToTensorV2
+from torch.utils.data import DataLoader, Dataset, Subset
+from torchvision.datasets import VOCSegmentation
 
-class VOCSegmentationDataset(Dataset):
-    """
-    Real Pascal VOC 2012 Segmentation Dataset
-    2913 images, 20 classes + background, real-world, standard benchmark
-    """
-    def __init__(self, root, year='2012', image_set='train', transform=None, download=True, max_samples=None):
-        self.dataset = VOCSegmentation(
-            root=root, year=year, image_set=image_set, 
-            download=download, transform=None
-        )
-        self.transform = transform
-        self.max_samples = max_samples
-        
-        if max_samples:
-            self.dataset = torch.utils.data.Subset(self.dataset, range(min(max_samples, len(self.dataset))))
-    
-    def __len__(self):
-        return len(self.dataset)
-    
-    def __getitem__(self, idx):
-        img, mask = self.dataset[idx]
-        
-        # Convert to numpy for albumentations
-        img_np = np.array(img)
-        mask_np = np.array(mask)
-        
-        # VOC mask has 0=background, 1-20=classes, 255=ignore
-        # For binary segmentation demo (e.g., person vs background), we can simplify
-        # For multi-class, keep as is but clip 255 to 0
-        mask_np = np.where(mask_np == 255, 0, mask_np)
-        
-        if self.transform:
-            transformed = self.transform(image=img_np, mask=mask_np)
-            img_np = transformed['image']
-            mask_np = transformed['mask']
-        
-        return img_np, mask_np.long()
+VOID_LABEL = 255
+VOC_NUM_CLASSES = 21
+TaskName = Literal["binary_foreground", "voc_multiclass"]
 
-def get_transforms(train=True, img_size=256):
+
+def get_transforms(train: bool, image_size: int) -> A.Compose:
+    transforms: list[A.BasicTransform] = [A.Resize(image_size, image_size)]
     if train:
-        return A.Compose([
-            A.Resize(img_size, img_size),
-            A.HorizontalFlip(p=0.5),
-            A.RandomBrightnessContrast(p=0.3),
-            A.ShiftScaleRotate(shift_limit=0.05, scale_limit=0.1, rotate_limit=15, p=0.3),
+        transforms.extend(
+            [
+                A.HorizontalFlip(p=0.5),
+                A.RandomBrightnessContrast(p=0.3),
+                A.ShiftScaleRotate(
+                    shift_limit=0.05, scale_limit=0.1, rotate_limit=15, p=0.3
+                ),
+            ]
+        )
+    transforms.extend(
+        [
             A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-            ToTensorV2()
-        ])
-    else:
-        return A.Compose([
-            A.Resize(img_size, img_size),
-            A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-            ToTensorV2()
-        ])
+            ToTensorV2(),
+        ]
+    )
+    return A.Compose(transforms)
 
-class CrackSegmentationDataset(Dataset):
+
+class VOCSegmentationDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
+    """VOC data as either 21-class labels or an honest foreground/background task.
+
+    ``binary_foreground`` maps classes 1--20 to foreground, leaves background as
+    0, and preserves the official VOC void label (255). It is *not* a defect or
+    crack dataset. ``voc_multiclass`` preserves the official 0--20 classes.
     """
-    Real Crack Segmentation - Fallback small dataset for fast training
-    Uses synthetic but realistic crack patterns on concrete background
-    Generated from real crack images distribution - for demo when VOC not available
-    Actually uses real crack masks from public dataset pattern
-    """
-    def __init__(self, root, split='train', transform=None, num_samples=400):
-        self.root = Path(root)
+
+    def __init__(
+        self,
+        root: str | Path,
+        split: Literal["train", "val"],
+        task: TaskName,
+        transform: A.Compose,
+        download: bool = False,
+        max_samples: int | None = None,
+    ) -> None:
+        self.task = task
+        dataset: Dataset = VOCSegmentation(
+            root=str(root), year="2012", image_set=split, download=download
+        )
+        if max_samples is not None:
+            if max_samples < 1:
+                raise ValueError("max_samples must be positive or null")
+            dataset = Subset(dataset, range(min(max_samples, len(dataset))))
+        self.dataset = dataset
         self.transform = transform
-        self.num_samples = num_samples
-        self.split = split
-        
-        # For real training, we generate from VOC but focus on binary segmentation
-        # This is a lightweight binary segmentation dataset: person vs background
-        # Which is real VOC data, just binarized for crack-like thin structure demo
-        self.voc = VOCSegmentation(root=str(self.root), year='2012', image_set=split, download=True)
-        if num_samples:
-            self.voc = torch.utils.data.Subset(self.voc, range(min(num_samples, len(self.voc))))
-    
-    def __len__(self):
-        return len(self.voc)
-    
-    def __getitem__(self, idx):
-        img, mask = self.voc[idx]
-        img_np = np.array(img)
-        mask_np = np.array(mask)
-        
-        # Binarize: Convert to crack-like binary segmentation
-        # For demo: Person class (15) and other objects as foreground - mimics defect detection
-        # This is still real VOC data, just binary
-        mask_binary = np.where((mask_np > 0) & (mask_np != 255), 1, 0).astype(np.uint8)
-        
-        if self.transform:
-            transformed = self.transform(image=img_np, mask=mask_binary)
-            img_np = transformed['image']
-            mask_binary = transformed['mask']
-        
-        return img_np, mask_binary.long()
 
-def get_dataloaders(batch_size=8, img_size=256, num_samples=400, root='./data'):
-    train_transform = get_transforms(train=True, img_size=img_size)
-    val_transform = get_transforms(train=False, img_size=img_size)
-    
-    train_dataset = CrackSegmentationDataset(root=root, split='train', transform=train_transform, num_samples=num_samples)
-    val_dataset = CrackSegmentationDataset(root=root, split='val', transform=val_transform, num_samples=num_samples//4)
-    
-    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True, num_workers=2)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False, num_workers=2)
-    
-    return train_loader, val_loader
+    def __len__(self) -> int:
+        return len(self.dataset)
 
-if __name__ == "__main__":
-    train_loader, val_loader = get_dataloaders(batch_size=4, img_size=256, num_samples=100, root='../data')
-    print(f"Train: {len(train_loader)} batches, Val: {len(val_loader)} batches")
-    for img, mask in train_loader:
-        print(f"Image: {img.shape}, Mask: {mask.shape}, Unique: {torch.unique(mask)}")
-        break
+    def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
+        image, mask = self.dataset[index]
+        image_array = np.asarray(image.convert("RGB"))
+        mask_array = np.asarray(mask, dtype=np.uint8)
+        if self.task == "binary_foreground":
+            void = mask_array == VOID_LABEL
+            mask_array = (mask_array > 0).astype(np.uint8)
+            mask_array[void] = VOID_LABEL
+        transformed = self.transform(image=image_array, mask=mask_array)
+        return transformed["image"], transformed["mask"].long()
+
+
+def get_dataloaders(
+    *,
+    batch_size: int,
+    image_size: int,
+    task: TaskName,
+    data_root: str | Path,
+    num_workers: int = 0,
+    max_train_samples: int | None = None,
+    max_val_samples: int | None = None,
+    download: bool = False,
+    seed: int = 42,
+) -> tuple[DataLoader, DataLoader]:
+    """Build official VOC train/val loaders without implicit data leakage."""
+    train_dataset = VOCSegmentationDataset(
+        data_root,
+        split="train",
+        task=task,
+        transform=get_transforms(train=True, image_size=image_size),
+        download=download,
+        max_samples=max_train_samples,
+    )
+    val_dataset = VOCSegmentationDataset(
+        data_root,
+        split="val",
+        task=task,
+        transform=get_transforms(train=False, image_size=image_size),
+        download=download,
+        max_samples=max_val_samples,
+    )
+    generator = torch.Generator().manual_seed(seed)
+    loader_options = {
+        "batch_size": batch_size,
+        "num_workers": num_workers,
+        "pin_memory": torch.cuda.is_available(),
+        "persistent_workers": num_workers > 0,
+    }
+    return (
+        DataLoader(train_dataset, shuffle=True, generator=generator, **loader_options),
+        DataLoader(val_dataset, shuffle=False, **loader_options),
+    )

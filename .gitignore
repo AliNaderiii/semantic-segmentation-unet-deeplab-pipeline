@@ -1,41 +1,25 @@
-# Data - large, download via torchvision or script
-data/
-VOCtrainval_*.tar
-VOCdevkit/
-*.tar
-*.zip
-
 # Python
 __pycache__/
-*.pyc
-*.pyo
-*.pyd
+*.py[cod]
 *.so
-*.egg-info/
-.env
-.venv
-venv/
-.ipynb_checkpoints/
+.venv/
 .pytest_cache/
-.mypy_cache/
+.ruff_cache/
+.coverage
 
-# Models - large, use Git LFS or releases
-# Keep small history json, ignore large pth
-models/*.pth
-models/*.pkl
-# Uncomment to include best model (55MB, under 100MB limit):
-# !models/best_unet.pth
+# Data and generated experiment artefacts
+data/
+checkpoints/*.pt
+checkpoints/*.pth
+checkpoints/*.json
+!checkpoints/.gitkeep
+reports/*
+!reports/README.md
 
-# OS
+# OS / editor
 .DS_Store
-Thumbs.db
-
-# Logs
-*.log
-reports/archive/
-wandb/
-lightning_logs/
-
-# IDE
 .vscode/
 .idea/
+
+# Distribution helper (kept in release ZIP, not project source)
+APPLY_CHANGES.ps1
