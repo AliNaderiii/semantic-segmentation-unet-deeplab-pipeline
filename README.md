@@ -1,350 +1,163 @@
-# Semantic Segmentation Pipeline - U-Net & DeepLabV3+
+# Pascal VOC Semantic Segmentation — Reproducible Reference Pipeline
 
-Production-ready semantic segmentation pipeline for defect and object segmentation using state-of-the-art architectures on real-world datasets.
+[![CI](https://github.com/AliNaderiii/semantic-segmentation-unet-deeplab-pipeline/actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-![Python](https://img.shields.io/badge/Python-3.9%2B-blue)
-![PyTorch](https://img.shields.io/badge/PyTorch-2.6%2B-red)
-![License](https://img.shields.io/badge/License-MIT-green)
-![Reports](https://img.shields.io/badge/Reports-7.5MB-orange)
-![DPI](https://img.shields.io/badge/Dashboards-300_DPI-blueviolet)
+A compact, reproducible semantic-segmentation reference implementation using **U-Net**, **DeepLabV3+**, or **FPN** from `segmentation-models-pytorch` and the official **Pascal VOC 2012** train/validation split.
 
-## Professional Dashboards v3.0
+> **Scope and honesty.** The default task is *VOC foreground/background segmentation*: VOC classes 1–20 are foreground and class 0 is background. It is **not an industrial-defect or crack-segmentation model**. The VOC void label (255) is preserved and excluded from loss and metrics. No model checkpoint or headline accuracy is committed to this repository; reproduce an experiment before reporting results.
 
-> 5 publication-ready dashboards (300 DPI, seaborn-darkgrid) - 7.5MB total reports, built from 100% real Pascal VOC 2012 data.
+## Why this revision
 
-### 1. Exploratory Data Analysis - VOC Class Distribution & Foreground Coverage
+The project is structured to be useful in a hiring review:
 
-![EDA Dashboard](reports/eda_dashboard_real.png)
+- an explicit task/data card rather than a vague “production-ready” claim;
+- an official train/validation split, with no validation augmentation;
+- void-aware Dice + cross-entropy loss and dataset-level (not batch-averaged) mIoU/Dice metrics;
+- self-describing checkpoints that contain model and dataset metadata;
+- a FastAPI service that returns **503** instead of random, untrained predictions when no checkpoint exists;
+- deterministic seeding, unit tests, CI, Docker, and a configurable smoke test.
 
-**Insights:**
-- **VOC class distribution**: Person 25% most frequent, 20 classes + background (real stats 2913 images)
-- **Image size**: Avg 500x375 variable, scatter plot
-- **Foreground coverage**: ~20% avg per image, binary vs multi-class
-- **Dataset split**: 1464 train / 1449 val (official VOC ImageSets)
-- **Challenges**: Occlusion, truncation, void label 255, class imbalance - text box with solutions
+## Data card
 
-### 2. Training Dashboard - Loss, mIoU, Dice, LR with Best Epoch Annotations
+| Item | Value |
+| --- | --- |
+| Dataset | [Pascal VOC 2012](http://host.robots.ox.ac.uk/pascal/VOC/) segmentation |
+| Split | Official `train` and `val` ImageSets |
+| Default task | Binary foreground/background (all object classes merged) |
+| Alternative task | `voc_multiclass` with `model.num_classes: 21` |
+| Void pixels | Original `255`; ignored in loss and all metrics |
+| Data location | `data/` (ignored by Git) |
+| Intended use | Learning, evaluation, and a maintainable engineering reference |
+| Not intended for | Medical, safety, industrial inspection, or other deployment without task-specific data, validation, monitoring, and governance |
 
-![Training Dashboard](reports/training_dashboard_real.png)
+Pascal VOC has its own terms; review them before use. This repository’s MIT license does not relicence the dataset.
 
-**Real Training (VOC 2012, 80 samples, 128px, ResNet18, 3 epochs CPU):**
-```
-Epoch 1: Train Loss 0.5639 mIoU 0.4166 Dice 0.5440 | Val Loss 0.6437 mIoU 0.4059 Dice 0.5715
-Epoch 2: Train Loss 0.4762 mIoU 0.5171 Dice 0.6526 | Val Loss 0.5177 mIoU 0.5301 Dice 0.6821
-Epoch 3: Train Loss 0.4268 mIoU 0.5736 Dice 0.7060 | Val Loss 0.4565 mIoU 0.5634 Dice 0.7049
-Best mIoU: 0.5634
-```
-- LR scheduling: ReduceLROnPlateau log scale
-- Combined Loss & mIoU plot with best epoch arrows
-- Metrics summary table + config box
+## Setup
 
-### 3. Evaluation Dashboard - Metrics, Confusion Matrix, Per-Class IoU, PR Curve, Radar
-
-![Evaluation Dashboard](reports/evaluation_dashboard_real.png)
-
-**Real Metrics on VOC Val:**
-- **mIoU**: 0.5634 | **Dice**: 0.7049 | **PixelAcc**: 0.7652 | **Precision**: 0.71 | **Recall**: 0.74 | **F1**: 0.72
-- **Confusion Matrix**: Real pixel counts BG vs FG
-- **Per-class IoU**: Background vs Foreground breakdown
-- **PR Curve** with AP, IoU/Dice distributions, Radar chart
-- Summary table with interpretation
-
-### 4. Prediction Dashboard - 8 Real VOC Predictions Grid
-
-![Prediction Dashboard](reports/prediction_dashboard_real.png)
-
-Each cell: Input RGB (real VOC) / GT mask / Pred mask. Real predictions from `src/evaluate.py` showing person, car, dog etc.
-
-### 5. Model Comparison Dashboard - Params vs mIoU Bubble Chart
-
-![Model Comparison](reports/model_comparison_dashboard_real.png)
-
-- **Bubble chart**: Params (M) vs mIoU, bubble size = Inference ms
-- **Ours Real**: 14.3M, 0.5634 mIoU, 38ms CPU
-- **SOTA VOC DeepLabV3+**: 42M, 0.82 mIoU, 85ms
-- Bar chart mIoU & Dice for 6 models
-- Detailed CSV: `reports/model_comparison_detailed_real.csv`
-
----
-
-## Overview
-
-This project implements a complete semantic segmentation workflow from data preparation to deployment:
-
-- **Real Dataset**: Pascal VOC 2012 Segmentation (2,913 images, 20 classes + background) - standard benchmark
-- **Architectures**: U-Net (ResNet18/34 backbone, 14M), DeepLabV3+ (ResNet50, 42M), SegFormer (MiT-B2)
-- **Loss**: Combined Dice + Cross-Entropy (0.5/0.5) for class imbalance handling
-- **Deployment**: FastAPI REST API for real-time inference - 38ms CPU
-- **Metrics**: mIoU, Dice, Pixel Accuracy - all computed on real validation data, visualized in professional dashboards
-
-No synthetic or fake data - all metrics, visualizations, and predictions are from real VOC 2012 images. Dashboards generated by `src/generate_dashboards.py`.
-
-## Dataset
-
-### Pascal VOC 2012 Segmentation
-
-- **Source**: http://host.robots.ox.ac.uk/pascal/VOC/
-- **Size**: 2.00 GB download, 2,913 images with pixel-wise annotations
-- **Classes**: 20 foreground classes (person, car, dog, etc.) + background
-- **Task**: Binary segmentation demo - foreground vs background (person-centric for defect detection analogy)
-- **Preprocessing**:
-  - Resize to 128x128 / 256x256
-  - Normalization: ImageNet mean [0.485, 0.456, 0.406], std [0.229, 0.224, 0.225]
-  - Augmentation: HorizontalFlip (0.5), RandomBrightnessContrast (0.3), ShiftScaleRotate (0.05/0.1/15°)
-
-**Leakage-safe**: Train/val split uses official VOC train/val ImageSets. No augmentation leakage.
-
-```
-data/
-├── VOCtrainval_11-May-2012.tar (1.9 GB)
-└── VOCdevkit/VOC2012/
-    ├── JPEGImages/ (2913 images)
-    ├── SegmentationClass/ (2913 masks)
-    └── ImageSets/Segmentation/
-```
-
-## Architecture
-
-### 1. U-Net with ResNet18 Encoder (Main Model, 14M)
-
-- **Encoder**: ResNet18 pretrained on ImageNet
-- **Decoder**: U-Net decoder with skip connections
-- **Output**: 2 classes (background, foreground)
-- **Best Performance**: mIoU 0.5634, Dice 0.7049, PixelAcc 0.7652 (real validation, 80 samples, 128px, 3 epochs)
-- **Inference**: 38ms CPU @128px
-
-Why U-Net:
-- Skip connections preserve spatial details critical for segmentation boundaries
-- Pretrained encoder accelerates convergence
-- Lightweight for CPU inference
-
-### 2. DeepLabV3+ with ResNet50 (42M)
-
-- **Encoder**: ResNet50 + Atrous Spatial Pyramid Pooling (ASPP)
-- **Decoder**: DeepLabV3+ decoder with low-level feature fusion
-- **Advantages**: Multi-scale context via atrous convolutions
-
-### Loss Function
-
-```python
-CombinedLoss = 0.5 * DiceLoss + 0.5 * CrossEntropyLoss
-
-DiceLoss = 1 - (2 * |pred ∩ true| + smooth) / (|pred| + |true| + smooth)
-```
-
-Handles class imbalance: foreground ~20% avg.
-
-## Training
-
-### Quick Start (CPU feasible)
+Python **3.10–3.12** is recommended. Install an appropriate matching PyTorch/torchvision pair from the [official PyTorch selector](https://pytorch.org/get-started/locally/) first. For a CPU-only Linux environment tested by the Dockerfile:
 
 ```bash
+python -m venv .venv
+# Windows PowerShell: .\.venv\Scripts\Activate.ps1
+# macOS/Linux: source .venv/bin/activate
+python -m pip install --upgrade pip
+pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cpu
 pip install -r requirements.txt
-python src/train.py
 ```
 
-Default fast mode:
-- `num_samples=80`, `img_size=128`, `batch_size=4`, `epochs=3`, `encoder=resnet18`
-- Time: ~50 sec/epoch CPU, ~3 min total
-- Memory: <2 GB RAM
-
-### Generate Professional Dashboards
+Download data explicitly (about 2 GB) rather than triggering a hidden transfer during training:
 
 ```bash
-python src/generate_dashboards.py
-# Creates 5 dashboards in reports/ (7.5MB, 300 DPI)
-# - eda_dashboard_real.png (1.6MB) VOC class dist + size
-# - training_dashboard_real.png (743KB) loss/mIoU/Dice/LR
-# - evaluation_dashboard_real.png (760KB) CM + per-class IoU + PR + radar
-# - prediction_dashboard_real.png (2.3MB) 8 real preds grid
-# - model_comparison_dashboard_real.png (284KB) bubble chart
+python -m src.download_data
 ```
 
-### Full Training (GPU recommended)
+## Train and evaluate
 
-```python
-from src.train import train_model
-train_model(
-    model_name='unet',
-    encoder='resnet34',
-    epochs=15,
-    batch_size=8,
-    img_size=256,
-    num_samples=400,
-    lr=1e-4
-)
-```
-
-- Scheduler: ReduceLROnPlateau (mode='max', factor=0.5, patience=3)
-- Optimizer: Adam, lr=1e-4
-
-### Real Training Results (This Repo)
-
-Trained on real VOC 2012, 80 samples, 128px, CPU:
-
-```
-Epoch 1/3 - Train Loss: 0.5639, mIoU: 0.4166, Dice: 0.5440
-           Val   Loss: 0.6437, mIoU: 0.4059, Dice: 0.5715
-
-Epoch 2/3 - Train Loss: 0.4762, mIoU: 0.5171, Dice: 0.6526
-           Val   Loss: 0.5177, mIoU: 0.5301, Dice: 0.6821
-
-Epoch 3/3 - Train Loss: 0.4268, mIoU: 0.5736, Dice: 0.7060
-           Val   Loss: 0.4565, mIoU: 0.5634, Dice: 0.7049
-
-Best mIoU: 0.5634
-```
-
-Curves in professional dashboards + `reports/training_curves_unet_real.png`.
-
-## Evaluation
+The default `config.yaml` uses the entire official split. It can be expensive on CPU.
 
 ```bash
-python src/evaluate.py
+# Full experiment from config.yaml
+python -m src.train --config config.yaml
+
+# Fast wiring check: 16 train / 8 validation samples and 1 epoch
+python -m src.train --config config.yaml --smoke-test
+
+# Evaluate the saved best checkpoint and write reports/evaluation_metrics.json
+python -m src.evaluate --config config.yaml --checkpoint checkpoints/best.pt
 ```
 
-Outputs:
-- **Metrics**: mIoU, Dice, Pixel Accuracy on real val set
-- **Visualizations**: `demo/real_pred_unet_batch*_img*.jpg` - Input / GT / Prediction
-- **Dashboards**: `reports/*_dashboard_real.png` (professional v3.0)
-- **CSV**: `reports/model_comparison_detailed_real.csv`
+Training writes:
 
-### Real Metrics (Validation, 20 images)
-
-| Model | mIoU | Dice | Pixel Acc | Params | Inference |
-|-------|------|------|-----------|--------|-----------|
-| U-Net ResNet18 (Ours Real) | 0.5634 | 0.7049 | 0.7652 | 14M | 38ms CPU |
-| U-Net ResNet34 (Est.) | 0.62 | 0.74 | 0.80 | 24M | 45ms |
-| DeepLabV3+ ResNet50 (Est.) | 0.68 | 0.79 | 0.84 | 42M | 85ms |
-| SOTA VOC DeepLabV3+ | 0.82 | 0.90 | 0.95 | 42M | 85ms |
-
-> All metrics from real VOC images.
-
-## Inference & Deployment
-
-### Python API
-
-```python
-from src.inference import SegmentationInference
-
-model = SegmentationInference(model_name='unet', encoder='resnet18')
-
-# From PIL
-from PIL import Image
-img = Image.open('test.jpg').convert('RGB')
-mask = model.predict(img)  # (H, W) 0/1
-
-# With overlay
-original, mask_resized, overlay = model.predict_with_overlay(img, alpha=0.5)
+```text
+checkpoints/
+├── best.pt                 # best validation mIoU, self-describing metadata
+├── last.pt
+└── training_history.json
 ```
 
-### FastAPI Server
+These outputs are ignored by Git. Record the commit SHA, complete config, environment, seed, hardware, training duration, and validation metrics when publishing an experiment. Do not compare scores obtained from different subsets, resolutions, or task definitions.
+
+### Switch to native 21-class VOC
+
+Change only the task and output channels together:
+
+```yaml
+dataset:
+  task: voc_multiclass
+model:
+  num_classes: 21
+```
+
+Then retrain. A binary checkpoint cannot be used for this task.
+
+## Serve a trained checkpoint
+
+The API does not ship with a checkpoint. Train first, then:
 
 ```bash
-uvicorn src.inference:app --host 0.0.0.0 --port 8000 --reload
+uvicorn src.inference:app --host 0.0.0.0 --port 8000
+curl http://localhost:8000/health
+curl -X POST http://localhost:8000/predict -F "file=@example.jpg" --output mask.png
+curl -X POST http://localhost:8000/predict-overlay -F "file=@example.jpg" --output overlay.png
 ```
 
-Endpoints:
-- `GET /` - Health check
-- `POST /predict` - Upload image -> PNG mask
-- `POST /predict_overlay` - Upload image -> PNG overlay
+- `GET /health` reports `model_not_loaded` until `checkpoints/best.pt` exists and `checkpoint_present` afterward.
+- `POST /predict` returns a PNG label mask at the original image size.
+- `POST /predict-overlay` returns a green overlay for non-background labels.
+- Use `CHECKPOINT_PATH=/path/to/model.pt` to select another checkpoint and `MAX_UPLOAD_BYTES` to change the 10 MiB upload limit.
+
+## Quality checks
 
 ```bash
-curl -X POST "http://localhost:8000/predict" -F "file=@test.jpg" --output mask.png
+pip install -r requirements-dev.txt
+pytest
+ruff check src tests
+python -m src.benchmark --model unet --encoder resnet18
 ```
 
-## Project Structure
+The GitHub Actions workflow runs the unit tests on Python 3.11 with the CPU PyTorch build. The tests cover metric arithmetic, void-label exclusion, and config validation; they intentionally do not claim to validate a trained model.
 
+## Docker
+
+```bash
+docker build -t semantic-segmentation-pipeline .
+docker run --rm -p 8000:8000 \
+  -v "$(pwd)/checkpoints:/app/checkpoints:ro" \
+  semantic-segmentation-pipeline
 ```
-semantic-segmentation-unet-deeplab-pipeline/
-├── src/
-│   ├── data_loader.py              # VOC 2012 loader, binary FG/BG, albumentations
-│   ├── models.py                   # U-Net, DeepLabV3+, SegFormer, Dice+CE
-│   ├── train.py                    # Training loop, IoU/Dice, history JSON
-│   ├── evaluate.py                 # Real evaluation, demo JPGs
-│   ├── inference.py                # SegmentationInference + FastAPI
-│   ├── config.py                   # YAML config loader
-│   ├── download_data.py            # VOC downloader
-│   ├── benchmark.py                # Inference benchmark
-│   ├── test_model.py               # Unit tests
-│   └── generate_dashboards.py      # Professional dashboards v3.0 (5 charts)
-├── reports/                        # 7.5MB professional dashboards
-│   ├── eda_dashboard_real.png (1.6MB) - VOC class dist + size
-│   ├── training_dashboard_real.png (743KB) - loss/mIoU/Dice/LR
-│   ├── evaluation_dashboard_real.png (760KB) - CM + IoU + PR + radar
-│   ├── prediction_dashboard_real.png (2.3MB) - 8 real preds
-│   ├── model_comparison_dashboard_real.png (284KB) - bubble chart
-│   ├── training_curves_unet_real.png
-│   ├── dice_curve_unet_real.png
-│   └── model_comparison_detailed_real.csv
-├── models/
-│   ├── best_unet.pth (55 MB, ResNet18, mIoU 0.5634)
-│   └── history_unet.json
-├── demo/ (10 real predictions)
-├── docs/
-│   ├── architecture.md
-│   └── CHANGELOG.md
-├── notebooks/01_training_demo.ipynb
+
+On Windows PowerShell, replace `$(pwd)` with `${PWD}`. The container health endpoint may be available before the model is trained, but predictions remain unavailable until a valid `best.pt` is mounted.
+
+## Project layout
+
+```text
 ├── config.yaml
+├── src/
+│   ├── data_loader.py       # VOC datasets, transforms, official splits
+│   ├── models.py            # model factory and void-aware losses
+│   ├── metrics.py           # streaming confusion-matrix metrics
+│   ├── train.py             # reproducible training/checkpointing
+│   ├── evaluate.py          # checkpoint evaluation
+│   ├── inference.py         # safe FastAPI inference service
+│   └── download_data.py
+├── tests/
+├── checkpoints/             # local, Git-ignored training artefacts
+├── reports/                 # local, Git-ignored evaluation artefacts
+├── .github/workflows/ci.yml
 ├── Dockerfile
-├── Makefile
-└── README.md
+└── Makefile
 ```
 
-## Installation
+## License and acknowledgement
 
-```bash
-git clone https://github.com/AliNaderiii/semantic-segmentation-unet-deeplab-pipeline.git
-cd semantic-segmentation-unet-deeplab-pipeline
-
-# CPU (recommended for demo)
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
-pip install -r requirements.txt
-
-# Or GPU
-pip install torch torchvision
-pip install -r requirements.txt
-```
-
-## Key Features for Production
-
-- **Professional dashboards v3.0**: 5 charts 7.5MB 300 DPI, seaborn-darkgrid, publication-ready
-- **Real VOC data**: 2913 images, 20 classes, class distribution visualized, foreground ~20%
-- **Leakage-safe**: Official VOC splits, no test leakage
-- **Reproducible**: Fixed seeds, deterministic, config.yaml
-- **Efficient**: 14M params, 38ms CPU inference, 128px fast mode
-- **Extensible**: Swap encoder (resnet34/50/101), model (deeplabv3plus, segformer)
-- **Deployable**: FastAPI with /predict and /predict_overlay, Dockerfile, Makefile
-- **Real metrics**: All curves and tables from actual training, confusion matrix real
-
-## License
-
-MIT License - Real dataset Pascal VOC 2012 under its own license (research use).
-
-## Citation
+Code is available under the [MIT License](LICENSE). Cite the original PASCAL VOC work when using the dataset:
 
 ```bibtex
-@misc{pascal-voc-2012,
-  author = "Everingham, M. et al.",
-  title = "The PASCAL Visual Object Classes Challenge 2012",
-  year = "2012"
+@article{everingham2010pascal,
+  title={The Pascal Visual Object Classes (VOC) Challenge},
+  author={Everingham, Mark and others},
+  journal={International Journal of Computer Vision},
+  year={2010}
 }
 ```
-
-## 4K Portfolio Thumbnails v4.2
-
-Professional 4K thumbnails for portfolio (3840x2160, 300 DPI):
-
-### Main Portfolio Thumbnail
-![Portfolio](reports/thumbnail_4k_portfolio.png)
-
-### Results Dashboard
-![Results](reports/thumbnail_4k_results.png)
-
-### AI-Generated Professional Thumbnails
-![AI Architecture](reports/ai_portfolio_thumbnail_1.png)
-![AI Results](reports/ai_portfolio_thumbnail_2.png)
-![AI Dashboard](reports/ai_portfolio_thumbnail_3.png)
-
-All thumbnails: `reports/thumbnail_4k_*.png` and `reports/ai_portfolio_thumbnail_*.png` - 7 images total, 4K, real data based.
-

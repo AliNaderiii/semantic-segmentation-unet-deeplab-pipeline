@@ -1,50 +1,18 @@
-# Changelog - Professional Improvements
+# Changelog
 
-## v2.0 - Expert Review Improvements (2026-09-28)
+## 2.0.0 — portfolio reliability revision
 
-### Critical Fixes
-- Fixed .gitignore to properly handle large model files (models/*.pth ignored, history kept)
-- Added LICENSE (MIT)
-- Added Dockerfile for production deployment
-- Added config.yaml for reproducible hyperparameters
-- Added Makefile for common tasks
-- Added src/config.py YAML loader
-- Added src/download_data.py for real VOC download
-- Added src/benchmark.py for inference time benchmarking
-- Added src/test_model.py for unit tests (dataloader + forward pass)
+### Correctness
 
-### Code Quality
-- Added type hints to models.py (ModelName, EncoderName Literals)
-- Added detailed docstrings with Args, Returns, Why
-- Refactored train.py with argparse + yaml config support
-- Added count_parameters utility
-- Improved calculate_iou/dice to handle nan correctly
-- Added precision, recall, F1 in evaluate.py
-- Added confusion matrix visualization
-- Improved plot_history with 3 subplots (loss, mIoU, dice)
+- Preserved Pascal VOC void pixels instead of relabelling them as background.
+- Added void-aware Dice and cross-entropy losses.
+- Replaced per-batch averaged metrics with a dataset-level streaming confusion matrix.
+- Removed the misleading crack/defect dataset abstraction; the default task is named accurately.
+- Made evaluation and inference require a self-describing trained checkpoint.
 
-### Documentation
-- Added models/README.md model card
-- Added docs/CHANGELOG.md
-- README already professional, no Upwork traces
+### Reproducibility and operations
 
-### Reports
-- Real training curves from VOC 80 samples 128px 3 epochs
-- Real metrics: mIoU 0.5634, Dice 0.7049, PixelAcc 0.7652
-- Demo 10 real predictions
-- Thumbnail 4K
-
-### Future Improvements (Roadmap)
-- Add GitHub Actions for linting
-- Add per-class IoU breakdown for 21 classes
-- Add CRF post-processing
-- Add TTA (Test-Time Augmentation)
-- Export ONNX for edge
-- Add W&B logging
-
-## v1.0 - Initial Release
-- U-Net ResNet18, DeepLabV3+, SegFormer
-- Real VOC 2012 2GB dataset
-- Combined Dice+CE loss
-- FastAPI deployment
-- Real metrics and demo images
+- Added deterministic seeding, official-split loaders, config validation, checkpoints, tests, CI, and linting.
+- Changed all executable imports to package-safe `python -m src...` usage.
+- Fixed the Docker image: CPU torch is installed once at pinned versions, `curl` is present for its health check, and the health endpoint is real.
+- Removed stale generated dashboards, thumbnails, demo images, and unsupported estimated/SOTA result claims. Recreate reports from a recorded experiment.

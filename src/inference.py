@@ -1,171 +1,132 @@
-"""
-Inference & Web Deployment - FastAPI for Online Inference
-Production-ready API for image segmentation
-"""
+"""Safe FastAPI inference service for a trained segmentation checkpoint."""
+from __future__ import annotations
 
-import torch
-import numpy as np
-from PIL import Image
 import io
-import cv2
+import os
 from pathlib import Path
-import albumentations as A
-from albumentations.pytorch import ToTensorV2
+from typing import Any
 
-from models import get_model
+import cv2
+import numpy as np
+import torch
+from PIL import Image, UnidentifiedImageError
+
+from .evaluate import load_checkpoint
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CHECKPOINT = PROJECT_ROOT / "checkpoints" / "best.pt"
+MAX_UPLOAD_BYTES = int(os.getenv("MAX_UPLOAD_BYTES", str(10 * 1024 * 1024)))
+
 
 class SegmentationInference:
-    def __init__(self, model_name='unet', encoder='resnet34', model_path=None, device=None):
-        if device is None:
-            self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-        else:
-            self.device = device
-        
-        self.model = get_model(model_name=model_name, num_classes=2, encoder=encoder)
-        
-        if model_path is None:
-            # Try to find best model
-            models_dir = Path(__file__).parent.parent / "models"
-            candidates = list(models_dir.glob(f"best_{model_name}*.pth"))
-            if candidates:
-                model_path = candidates[0]
-        
-        if model_path and Path(model_path).exists():
-            print(f"Loading model from {model_path}")
-            self.model.load_state_dict(torch.load(model_path, map_location=self.device))
-        else:
-            print(f"Model not found, using ImageNet pretrained encoder only")
-        
-        self.model = self.model.to(self.device)
-        self.model.eval()
-        
-        self.transform = A.Compose([
-            A.Resize(256, 256),
-            A.Normalize(mean=(0.485, 0.456, 0.406), std=(0.229, 0.224, 0.225)),
-            ToTensorV2()
-        ])
-    
-    def predict(self, image):
-        """
-        Predict segmentation mask for PIL Image or numpy array
-        Returns: mask (H, W) with 0=background, 1=foreground
-        """
-        if isinstance(image, Image.Image):
-            image_np = np.array(image)
-        else:
-            image_np = image
-        
-        # Transform
-        transformed = self.transform(image=image_np)
-        img_tensor = transformed['image'].unsqueeze(0).to(self.device)
-        
-        with torch.no_grad():
-            output = self.model(img_tensor)
-            pred = torch.argmax(output, dim=1).squeeze(0).cpu().numpy()
-        
-        return pred
-    
-    def predict_with_overlay(self, image, alpha=0.5):
-        """
-        Predict and create overlay visualization
-        Returns: original, mask, overlay
-        """
-        if isinstance(image, Image.Image):
-            image_np = np.array(image)
-        else:
-            image_np = image
-        
-        mask = self.predict(image_np)
-        
-        # Resize mask to original image size
-        mask_resized = cv2.resize(mask.astype(np.uint8), (image_np.shape[1], image_np.shape[0]), interpolation=cv2.INTER_NEAREST)
-        
-        # Create colored mask
-        colored_mask = np.zeros_like(image_np)
-        colored_mask[mask_resized == 1] = [0, 255, 0]  # Green for foreground
-        
-        # Overlay
-        overlay = cv2.addWeighted(image_np, 1-alpha, colored_mask, alpha, 0)
-        
-        return image_np, mask_resized, overlay
+    """Load a self-describing checkpoint and produce original-size label masks."""
 
-# FastAPI App
+    def __init__(self, checkpoint_path: str | Path = DEFAULT_CHECKPOINT) -> None:
+        self.checkpoint_path = Path(checkpoint_path)
+        if not self.checkpoint_path.is_file():
+            raise FileNotFoundError(
+                f"No trained checkpoint at {self.checkpoint_path}. "
+                "Run `python -m src.train` before starting predictions."
+            )
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.model, payload = load_checkpoint(self.checkpoint_path, self.device)
+        self.image_size = int(payload["dataset"]["image_size"])
+        self.num_classes = int(payload["model"]["num_classes"])
+        self.task = payload["dataset"]["task"]
+
+    def predict(self, image: Image.Image | np.ndarray) -> np.ndarray:
+        """Return an integer label mask resized to the original image dimensions."""
+        if isinstance(image, Image.Image):
+            rgb = np.asarray(image.convert("RGB"))
+        else:
+            rgb = np.asarray(image)
+            if rgb.ndim != 3 or rgb.shape[2] not in {3, 4}:
+                raise ValueError("Expected an RGB/RGBA image array")
+            rgb = rgb[:, :, :3]
+        original_height, original_width = rgb.shape[:2]
+        resized = cv2.resize(rgb, (self.image_size, self.image_size), interpolation=cv2.INTER_LINEAR)
+        normalized = resized.astype(np.float32) / 255.0
+        normalized = (normalized - np.array([0.485, 0.456, 0.406], dtype=np.float32)) / np.array(
+            [0.229, 0.224, 0.225], dtype=np.float32
+        )
+        input_tensor = torch.from_numpy(normalized.transpose(2, 0, 1)).unsqueeze(0).to(self.device)
+        with torch.inference_mode():
+            labels = self.model(input_tensor).argmax(dim=1).squeeze(0).cpu().numpy().astype(np.uint8)
+        return cv2.resize(labels, (original_width, original_height), interpolation=cv2.INTER_NEAREST)
+
+    def predict_overlay(self, image: Image.Image | np.ndarray, alpha: float = 0.45) -> np.ndarray:
+        """Return an RGB image with non-background predictions rendered in green."""
+        if not 0.0 <= alpha <= 1.0:
+            raise ValueError("alpha must be in [0, 1]")
+        original = np.asarray(image.convert("RGB")) if isinstance(image, Image.Image) else np.asarray(image)[:, :, :3]
+        mask = self.predict(original)
+        colored = np.zeros_like(original)
+        colored[mask > 0] = (0, 255, 0)
+        return cv2.addWeighted(original, 1 - alpha, colored, alpha, 0)
+
+
 try:
-    from fastapi import FastAPI, File, UploadFile
+    from fastapi import FastAPI, File, HTTPException, UploadFile
     from fastapi.responses import StreamingResponse
-    import uvicorn
-    
-    app = FastAPI(title="Image Segmentation API", description="U-Net & DeepLabV3+ for defect segmentation", version="1.0")
-    
-    # Global model
-    inference_model = None
-    
-    @app.on_event("startup")
-    def load_model():
-        global inference_model
-        inference_model = SegmentationInference(model_name='unet', encoder='resnet18')
-    
-    @app.get("/")
-    def root():
-        return {"message": "Segmentation API - U-Net & DeepLabV3+", "models": ["unet", "deeplabv3plus"], "status": "ready"}
-    
-    @app.post("/predict")
-    async def predict(file: UploadFile = File(...)):
-        """
-        Upload image, get segmentation mask
-        """
-        image = Image.open(io.BytesIO(await file.read())).convert('RGB')
-        mask = inference_model.predict(image)
-        
-        # Convert mask to image
-        mask_img = Image.fromarray((mask * 255).astype(np.uint8))
-        
-        # Save to bytes
-        img_byte_arr = io.BytesIO()
-        mask_img.save(img_byte_arr, format='PNG')
-        img_byte_arr.seek(0)
-        
-        return StreamingResponse(img_byte_arr, media_type="image/png")
-    
-    @app.post("/predict_overlay")
-    async def predict_overlay(file: UploadFile = File(...)):
-        """
-        Upload image, get overlay visualization
-        """
-        image = Image.open(io.BytesIO(await file.read())).convert('RGB')
-        original, mask, overlay = inference_model.predict_with_overlay(image)
-        
-        overlay_img = Image.fromarray(overlay.astype(np.uint8))
-        img_byte_arr = io.BytesIO()
-        overlay_img.save(img_byte_arr, format='PNG')
-        img_byte_arr.seek(0)
-        
-        return StreamingResponse(img_byte_arr, media_type="image/png")
-    
-    if __name__ == "__main__":
-        uvicorn.run(app, host="0.0.0.0", port=8000)
 
-except ImportError:
-    print("FastAPI not installed, skipping API")
+    app = FastAPI(
+        title="VOC Segmentation Reference API",
+        description=(
+            "Serves a locally trained U-Net/DeepLabV3+/FPN checkpoint. "
+            "It will not report ready or return random predictions without a checkpoint."
+        ),
+        version="2.0.0",
+    )
+    _engine: SegmentationInference | None = None
+    _load_error: str | None = None
+
+    def get_engine() -> SegmentationInference:
+        """Lazy-load exactly one checkpoint and surface a clear 503 if unavailable."""
+        global _engine, _load_error
+        if _engine is None and _load_error is None:
+            try:
+                checkpoint = Path(os.getenv("CHECKPOINT_PATH", str(DEFAULT_CHECKPOINT)))
+                _engine = SegmentationInference(checkpoint)
+            except (FileNotFoundError, RuntimeError, ValueError) as error:
+                _load_error = str(error)
+        if _engine is None:
+            raise HTTPException(status_code=503, detail={"message": "Model unavailable", "reason": _load_error})
+        return _engine
+
+    async def read_image(file: UploadFile) -> Image.Image:
+        if file.content_type and not file.content_type.startswith("image/"):
+            raise HTTPException(status_code=415, detail="Upload an image file.")
+        raw = await file.read(MAX_UPLOAD_BYTES + 1)
+        if len(raw) > MAX_UPLOAD_BYTES:
+            raise HTTPException(status_code=413, detail=f"Image exceeds {MAX_UPLOAD_BYTES} byte limit.")
+        try:
+            return Image.open(io.BytesIO(raw)).convert("RGB")
+        except (UnidentifiedImageError, OSError, ValueError) as error:
+            raise HTTPException(status_code=422, detail="The upload is not a valid readable image.") from error
+
+    @app.get("/health")
+    def health() -> dict[str, Any]:
+        checkpoint = Path(os.getenv("CHECKPOINT_PATH", str(DEFAULT_CHECKPOINT)))
+        return {
+            "status": "checkpoint_present" if checkpoint.is_file() else "model_not_loaded",
+            "checkpoint": str(checkpoint),
+            "prediction_endpoint": "/predict",
+        }
+
+    @app.post("/predict", response_class=StreamingResponse)
+    async def predict(file: UploadFile = File(...)) -> StreamingResponse:
+        mask = get_engine().predict(await read_image(file))
+        buffer = io.BytesIO()
+        Image.fromarray(mask).save(buffer, format="PNG")
+        buffer.seek(0)
+        return StreamingResponse(buffer, media_type="image/png")
+
+    @app.post("/predict-overlay", response_class=StreamingResponse)
+    async def predict_overlay(file: UploadFile = File(...)) -> StreamingResponse:
+        overlay = get_engine().predict_overlay(await read_image(file))
+        buffer = io.BytesIO()
+        Image.fromarray(overlay).save(buffer, format="PNG")
+        buffer.seek(0)
+        return StreamingResponse(buffer, media_type="image/png")
+except ImportError:  # pragma: no cover - makes library imports possible without serving extras
     app = None
-
-if __name__ == "__main__":
-    # Test inference
-    from data_loader import get_dataloaders
-    
-    train_loader, val_loader = get_dataloaders(batch_size=2, img_size=256, num_samples=20, root='../data')
-    
-    inference = SegmentationInference(model_name='unet', encoder='resnet18')
-    
-    for images, masks in val_loader:
-        # Take first image from batch, convert to PIL for test
-        img_tensor = images[0]
-        mean = torch.tensor([0.485, 0.456, 0.406]).view(3, 1, 1)
-        std = torch.tensor([0.229, 0.224, 0.225]).view(3, 1, 1)
-        img_denorm = img_tensor * std + mean
-        img_denorm = torch.clamp(img_denorm, 0, 1)
-        img_np = (img_denorm.permute(1, 2, 0).numpy() * 255).astype(np.uint8)
-        
-        pred_mask = inference.predict(img_np)
-        print(f"Predicted mask shape: {pred_mask.shape}, unique: {np.unique(pred_mask)}")
-        break

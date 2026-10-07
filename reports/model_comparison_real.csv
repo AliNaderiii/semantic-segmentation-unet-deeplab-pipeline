@@ -1,2 +1,0 @@
-Model,mIoU,Dice,Pixel Acc,Params,Inference (ms)
-U-Net ResNet18 (Real),0.5633761018514634,0.7049455732107163,0.7652374267578125,14M,38

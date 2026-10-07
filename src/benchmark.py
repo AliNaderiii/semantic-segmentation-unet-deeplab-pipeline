@@ -1,40 +1,42 @@
-"""Benchmark inference time and model size"""
-import torch
-import time
-from pathlib import Path
-from models import get_model, count_parameters
-import numpy as np
+"""Benchmark a model architecture without silently downloading pretrained weights."""
+from __future__ import annotations
 
-def benchmark(model_name='unet', encoder='resnet18', img_size=256, num_runs=50):
-    device = torch.device('cpu')
-    model = get_model(model_name, num_classes=2, encoder=encoder)
-    model = model.to(device)
-    model.eval()
-    
-    params = count_parameters(model)
-    print(f"{model_name} {encoder}: {params:.2f}M params")
-    
-    # Dummy input
-    x = torch.randn(1, 3, img_size, img_size).to(device)
-    
-    # Warmup
-    for _ in range(10):
-        with torch.no_grad():
-            _ = model(x)
-    
-    # Benchmark
-    times = []
-    for _ in range(num_runs):
-        start = time.time()
-        with torch.no_grad():
-            _ = model(x)
-        times.append((time.time() - start) * 1000)  # ms
-    
-    avg = np.mean(times)
-    std = np.std(times)
-    print(f"Inference @ {img_size}x{img_size}: {avg:.1f} ± {std:.1f} ms (CPU, {num_runs} runs)")
-    return params, avg
+import argparse
+import statistics
+import time
+
+import torch
+
+from .models import count_parameters, get_model
+
+
+def benchmark(model_name: str, encoder: str, image_size: int, runs: int) -> None:
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    model = get_model(model_name, num_classes=2, encoder=encoder, pretrained=False).to(device).eval()
+    input_tensor = torch.randn(1, 3, image_size, image_size, device=device)
+    with torch.inference_mode():
+        for _ in range(10):
+            model(input_tensor)
+        if device.type == "cuda":
+            torch.cuda.synchronize()
+        times = []
+        for _ in range(runs):
+            start = time.perf_counter()
+            model(input_tensor)
+            if device.type == "cuda":
+                torch.cuda.synchronize()
+            times.append((time.perf_counter() - start) * 1000)
+    print(
+        f"{model_name}/{encoder}: {count_parameters(model):.2f}M parameters; "
+        f"{statistics.mean(times):.2f} ± {statistics.stdev(times):.2f} ms on {device}"
+    )
+
 
 if __name__ == "__main__":
-    for model_name, encoder in [('unet','resnet18'), ('unet','resnet34'), ('deeplabv3plus','resnet50'), ('fpn','resnet34')]:
-        benchmark(model_name, encoder, img_size=128, num_runs=20)
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--model", default="unet")
+    parser.add_argument("--encoder", default="resnet18")
+    parser.add_argument("--image-size", type=int, default=256)
+    parser.add_argument("--runs", type=int, default=50)
+    args = parser.parse_args()
+    benchmark(args.model, args.encoder, args.image_size, args.runs)
