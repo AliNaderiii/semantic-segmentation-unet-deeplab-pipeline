@@ -18,6 +18,26 @@ The project is structured to be useful in a hiring review:
 - a FastAPI service that returns **503** instead of random, untrained predictions when no checkpoint exists;
 - deterministic seeding, unit tests, CI, Docker, and a configurable smoke test.
 
+
+## Visual overview
+
+![Current v2 protocol](assets/pipeline-protocol.svg)
+
+The diagram above describes the **current v2 code and evidence contract**. It makes no performance claim and remains valid before a model is trained.
+
+<details>
+<summary><strong>Archived v1 visual gallery — qualitative context only</strong></summary>
+
+These are genuine visuals retained from the pre-v2 repository. They remain useful for understanding the former exploration and qualitative predictions, but their metrics are **not** current v2 results because the v2 evaluation protocol and void handling changed. See [`assets/legacy-v1/README.md`](assets/legacy-v1/README.md).
+
+![Archived v1 prediction snapshot](assets/legacy-v1/prediction_dashboard_real.png)
+
+![Archived v1 evaluation snapshot](assets/legacy-v1/evaluation_dashboard_real.png)
+
+</details>
+
+A current, reportable gallery is produced after a recorded v2 run from the checkpoint, configuration, data provenance, and evaluation artifacts.
+
 ## Data card
 
 | Item | Value |
