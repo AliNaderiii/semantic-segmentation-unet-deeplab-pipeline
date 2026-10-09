@@ -1,0 +1,31 @@
+﻿dataset:
+  name: pascal_voc_2012
+  root: data
+  task: voc_multiclass
+  image_size: 128
+  validation_fraction: 0.20
+  split_seed: 42
+  max_train_samples: null
+  max_test_samples: null
+
+model:
+  name: unet
+  encoder: resnet18
+  pretrained: true
+  num_classes: 21
+
+training:
+  batch_size: 4
+  epochs: 10
+  learning_rate: 0.0001
+  weight_decay: 0.00001
+  scheduler_patience: 2
+  scheduler_factor: 0.5
+  early_stopping_patience: 4
+  loss_dice_weight: 0.5
+  loss_ce_weight: 0.5
+
+runtime:
+  seed: 42
+  deterministic: true
+  num_workers: 0
