@@ -5,7 +5,7 @@
 
 A reproducible semantic-segmentation reference pipeline for **Pascal VOC 2012** using U-Net, DeepLabV3+, or FPN from `segmentation-models-pytorch`.
 
-> **Protocol first.** Development model selection, early stopping, and scheduler decisions use a deterministic validation split derived only from official Pascal VOC `train`. The labeled official VOC `val` split is held out until one final evaluation. Raw data and model weights are never committed; any published result must include its configuration, split manifest, code commit, environment metadata, and artifact hashes.
+> **Protocol first.** Development model selection, early stopping, and scheduler decisions use a deterministic validation split derived only from official Pascal VOC `train`. The labeled official VOC `val` split is held out until one final evaluation. Raw data and model weights are never committed. Published scores appear only with their versioned configuration, split manifest, code commit, environment metadata, and artifact hashes.
 
 ## Why this revision exists
 
@@ -41,7 +41,19 @@ These are genuine visuals retained from the pre-v2 repository. They remain usefu
 
 </details>
 
-A current, reportable dashboard is generated only after a recorded v3 run from its configuration, split manifest, checkpoint metadata, training history, and one final official-validation evaluation.
+## Recorded v3 experiment
+
+The following is the first reportable v3 run. Unlike the archived gallery above, it was generated after a real recorded run using the current held-out protocol.
+
+![Recorded Pascal VOC multiclass CPU baseline dashboard](assets/experiments/voc2012_multiclass_cpu_baseline_dashboard.png)
+
+| Held-out official Pascal VOC validation metric | Result |
+| --- | ---: |
+| Mean IoU | **0.099281** |
+| Mean Dice | **0.134228** |
+| Mean precision / recall | 0.274585 / 0.170493 |
+
+This single CPU baseline used native 21-class VOC labels, U-Net with a pretrained ResNet-18 encoder, 128 × 128 inputs, seed 42, and a deterministic 1,171/293 development train/validation split derived only from the 1,464 official training images. `best.pt` was selected at epoch 9 using development-validation mIoU (0.103012); the 1,449-image public VOC validation split was iterated only after selection. See the complete [experiment record](docs/experiments/voc2012-multiclass-cpu-baseline.md) and versioned evidence bundle. This low-resolution 10-epoch CPU baseline is not a deployment, safety, SOTA, or cross-protocol comparison claim.
 
 ## Data card
 
@@ -107,7 +119,7 @@ checkpoints/
 └── training_history.json
 ```
 
-Evaluation writes `reports/heldout_val_metrics.json`; reporting writes `reports/experiment_dashboard.png`. Both local output paths remain ignored so unrelated runs cannot be accidentally committed. A reportable evidence bundle must contain the matching configuration, split manifest, checkpoint hash, code commit, seed, hardware, dependency versions, and explicit data provenance.
+Temporary output under `checkpoints/` and `reports/` remains ignored so unrelated local runs cannot be accidentally committed. The recorded CPU baseline instead publishes a deliberately curated evidence bundle under [`experiments/runs/voc2012-multiclass-cpu-baseline/`](experiments/runs/voc2012-multiclass-cpu-baseline/), its exact configuration, and a dashboard copied to `assets/experiments/`. Raw data and checkpoint weights remain excluded; their local provenance and SHA-256 fingerprints are recorded in the bundle.
 
 ### What to report
 

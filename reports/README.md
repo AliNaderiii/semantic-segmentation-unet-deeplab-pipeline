@@ -1,12 +1,11 @@
-# Generated experiment artifacts
+# Generated and recorded experiment artifacts
 
-`reports/` is intentionally ignored by Git because it is the scratch location for outputs from the current local checkpoint.
+`reports/` is ignored by Git because it is the local scratch location for outputs from the current checkpoint. A temporary dashboard or metric JSON must not be committed on its own.
 
-After a configuration is final and a validation-selected checkpoint exists, run exactly one final official-VOC-validation evaluation:
+The recorded Pascal VOC multiclass CPU baseline is the exception because its complete safe-to-publish evidence bundle has been deliberately copied to:
 
-```bash
-python -m src.evaluate --checkpoint checkpoints/best.pt --config config.yaml
-python -m src.reporting
-```
+- `assets/experiments/voc2012_multiclass_cpu_baseline_dashboard.png`;
+- `experiments/runs/voc2012-multiclass-cpu-baseline/`;
+- `docs/experiments/voc2012-multiclass-cpu-baseline.md`.
 
-This creates `heldout_val_metrics.json` and `experiment_dashboard.png` from the recorded checkpoint, development split manifest, training history, and untouched official VOC `val` split. Do not commit a dashboard or headline score without its exact configuration, split manifest, code commit, seed, hardware, dependency versions, checkpoint hash, and dataset provenance.
+That bundle contains no raw Pascal VOC data and no model weights. It includes hashes that identify the local selected checkpoint, configuration, and dashboard. For a new run, keep using this ignored directory and publish a new named evidence bundle only after protocol, provenance, and held-out evaluation have been reviewed.
