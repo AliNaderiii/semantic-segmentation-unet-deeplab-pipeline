@@ -1,19 +1,22 @@
-"""Pascal VOC 2012 datasets and loaders with correct treatment of void labels."""
+"""Pascal VOC loaders with deterministic development validation and held-out final evaluation."""
 from __future__ import annotations
 
+import json
+import random
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal, Sequence
 
 import albumentations as A
 import numpy as np
 import torch
 from albumentations.pytorch import ToTensorV2
-from torch.utils.data import DataLoader, Dataset, Subset
+from torch.utils.data import DataLoader, Dataset
 from torchvision.datasets import VOCSegmentation
 
 VOID_LABEL = 255
 VOC_NUM_CLASSES = 21
 TaskName = Literal["binary_foreground", "voc_multiclass"]
+SplitName = Literal["train", "validation", "test"]
 
 
 def get_transforms(train: bool, image_size: int) -> A.Compose:
@@ -37,13 +40,61 @@ def get_transforms(train: bool, image_size: int) -> A.Compose:
     return A.Compose(transforms)
 
 
-class VOCSegmentationDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
-    """VOC data as either 21-class labels or an honest foreground/background task.
+def _sample_ids(dataset: VOCSegmentation) -> list[str]:
+    """Return stable VOC identifiers and reject malformed source metadata."""
+    identifiers = [Path(path).stem for path in dataset.images]
+    if not identifiers:
+        raise FileNotFoundError("Pascal VOC split contains no images")
+    if len(identifiers) != len(set(identifiers)):
+        raise ValueError("Pascal VOC split contains duplicate image identifiers")
+    return identifiers
 
-    ``binary_foreground`` maps classes 1--20 to foreground, leaves background as
-    0, and preserves the official VOC void label (255). It is *not* a defect or
-    crack dataset. ``voc_multiclass`` preserves the official 0--20 classes.
+
+def discover_sample_ids(
+    root: str | Path,
+    split: Literal["train", "val"],
+    *,
+    download: bool = False,
+    max_samples: int | None = None,
+) -> list[str]:
+    """Discover a local VOC split without reading image pixels."""
+    source = VOCSegmentation(root=str(root), year="2012", image_set=split, download=download)
+    identifiers = _sample_ids(source)
+    if max_samples is not None:
+        if max_samples < 2:
+            raise ValueError("max_samples must be at least two or null")
+        identifiers = identifiers[: min(max_samples, len(identifiers))]
+    return identifiers
+
+
+def split_training_ids(
+    sample_ids: Sequence[str], validation_fraction: float, seed: int
+) -> tuple[list[str], list[str]]:
+    """Split only official VOC training identifiers for development selection.
+
+    The returned lists are canonical-order deterministic. The official VOC
+    ``val`` split is never passed into this function and is reserved for the
+    one final evaluation after checkpoint selection is complete.
     """
+    if not 0.0 < validation_fraction < 1.0:
+        raise ValueError("validation_fraction must be between 0 and 1")
+    ordered_ids = sorted(sample_ids)
+    if len(ordered_ids) != len(set(ordered_ids)):
+        raise ValueError("Training identifiers must be unique")
+    if len(ordered_ids) < 2:
+        raise ValueError("At least two official training samples are required")
+    shuffled_ids = list(ordered_ids)
+    random.Random(seed).shuffle(shuffled_ids)
+    validation_count = max(1, round(len(shuffled_ids) * validation_fraction))
+    validation_count = min(validation_count, len(shuffled_ids) - 1)
+    validation_ids = set(shuffled_ids[:validation_count])
+    train_ids = [sample_id for sample_id in ordered_ids if sample_id not in validation_ids]
+    validation = [sample_id for sample_id in ordered_ids if sample_id in validation_ids]
+    return train_ids, validation
+
+
+class VOCSegmentationDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
+    """VOC data over an explicit identifier set and a task-specific label view."""
 
     def __init__(
         self,
@@ -51,25 +102,32 @@ class VOCSegmentationDataset(Dataset[tuple[torch.Tensor, torch.Tensor]]):
         split: Literal["train", "val"],
         task: TaskName,
         transform: A.Compose,
+        sample_ids: Sequence[str],
         download: bool = False,
-        max_samples: int | None = None,
     ) -> None:
         self.task = task
-        dataset: Dataset = VOCSegmentation(
-            root=str(root), year="2012", image_set=split, download=download
-        )
-        if max_samples is not None:
-            if max_samples < 1:
-                raise ValueError("max_samples must be positive or null")
-            dataset = Subset(dataset, range(min(max_samples, len(dataset))))
-        self.dataset = dataset
+        source = VOCSegmentation(root=str(root), year="2012", image_set=split, download=download)
+        source_ids = _sample_ids(source)
+        index_by_id = {sample_id: index for index, sample_id in enumerate(source_ids)}
+        requested_ids = list(sample_ids)
+        if not requested_ids:
+            raise ValueError("Dataset received no sample identifiers")
+        if len(requested_ids) != len(set(requested_ids)):
+            raise ValueError("Dataset received duplicate sample identifiers")
+        missing_ids = set(requested_ids).difference(index_by_id)
+        if missing_ids:
+            example = ", ".join(sorted(missing_ids)[:5])
+            raise ValueError(f"Requested VOC identifiers are absent from {split}: {example}")
+        self.source = source
+        self.indices = [index_by_id[sample_id] for sample_id in requested_ids]
+        self.sample_ids = requested_ids
         self.transform = transform
 
     def __len__(self) -> int:
-        return len(self.dataset)
+        return len(self.indices)
 
     def __getitem__(self, index: int) -> tuple[torch.Tensor, torch.Tensor]:
-        image, mask = self.dataset[index]
+        image, mask = self.source[self.indices[index]]
         image_array = np.asarray(image.convert("RGB"))
         mask_array = np.asarray(mask, dtype=np.uint8)
         if self.task == "binary_foreground":
@@ -86,37 +144,79 @@ def get_dataloaders(
     image_size: int,
     task: TaskName,
     data_root: str | Path,
+    validation_fraction: float,
+    split_seed: int,
     num_workers: int = 0,
     max_train_samples: int | None = None,
-    max_val_samples: int | None = None,
+    max_test_samples: int | None = None,
     download: bool = False,
-    seed: int = 42,
-) -> tuple[DataLoader, DataLoader]:
-    """Build official VOC train/val loaders without implicit data leakage."""
-    train_dataset = VOCSegmentationDataset(
-        data_root,
-        split="train",
-        task=task,
-        transform=get_transforms(train=True, image_size=image_size),
-        download=download,
-        max_samples=max_train_samples,
+) -> tuple[dict[SplitName, DataLoader], dict[str, Any]]:
+    """Build development and final-evaluation loaders plus split provenance.
+
+    ``train`` and ``validation`` are both derived only from official VOC train.
+    ``test`` is the untouched official VOC validation split. The latter is
+    constructed for explicit final evaluation but never iterated by ``src.train``.
+    """
+    source_train_ids = discover_sample_ids(
+        data_root, "train", download=download, max_samples=max_train_samples
     )
-    val_dataset = VOCSegmentationDataset(
-        data_root,
-        split="val",
-        task=task,
-        transform=get_transforms(train=False, image_size=image_size),
-        download=download,
-        max_samples=max_val_samples,
+    source_test_ids = discover_sample_ids(
+        data_root, "val", download=False, max_samples=max_test_samples
     )
-    generator = torch.Generator().manual_seed(seed)
+    train_ids, validation_ids = split_training_ids(source_train_ids, validation_fraction, split_seed)
+    test_ids = sorted(source_test_ids)
+    if set(train_ids) & set(validation_ids):
+        raise ValueError("Development train/validation overlap detected")
+    if (set(train_ids) | set(validation_ids)) & set(test_ids):
+        raise ValueError("Official VOC train and val identifiers overlap")
+
     loader_options = {
         "batch_size": batch_size,
         "num_workers": num_workers,
         "pin_memory": torch.cuda.is_available(),
         "persistent_workers": num_workers > 0,
     }
-    return (
-        DataLoader(train_dataset, shuffle=True, generator=generator, **loader_options),
-        DataLoader(val_dataset, shuffle=False, **loader_options),
-    )
+    generator = torch.Generator().manual_seed(split_seed)
+    loaders: dict[SplitName, DataLoader] = {
+        "train": DataLoader(
+            VOCSegmentationDataset(
+                data_root, "train", task, get_transforms(True, image_size), train_ids
+            ),
+            shuffle=True,
+            generator=generator,
+            **loader_options,
+        ),
+        "validation": DataLoader(
+            VOCSegmentationDataset(
+                data_root, "train", task, get_transforms(False, image_size), validation_ids
+            ),
+            shuffle=False,
+            **loader_options,
+        ),
+        "test": DataLoader(
+            VOCSegmentationDataset(
+                data_root, "val", task, get_transforms(False, image_size), test_ids
+            ),
+            shuffle=False,
+            **loader_options,
+        ),
+    }
+    manifest: dict[str, Any] = {
+        "dataset": "Pascal VOC 2012",
+        "protocol": "development validation derived only from official train; official val held out",
+        "source_train_count": len(source_train_ids),
+        "source_test_count": len(source_test_ids),
+        "validation_fraction": validation_fraction,
+        "split_seed": split_seed,
+        "train_ids": train_ids,
+        "validation_ids": validation_ids,
+        "test_ids": test_ids,
+    }
+    return loaders, manifest
+
+
+def write_split_manifest(manifest: dict[str, Any], output_path: str | Path) -> None:
+    """Write the exact split identity list used by a recorded experiment."""
+    path = Path(output_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")

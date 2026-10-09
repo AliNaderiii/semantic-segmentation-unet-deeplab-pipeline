@@ -1,34 +1,39 @@
-# Pascal VOC Semantic Segmentation — Reproducible Reference Pipeline
+# Pascal VOC Semantic Segmentation — Evaluation-Safe Reference Pipeline
 
 [![CI](https://github.com/AliNaderiii/semantic-segmentation-unet-deeplab-pipeline/actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-A compact, reproducible semantic-segmentation reference implementation using **U-Net**, **DeepLabV3+**, or **FPN** from `segmentation-models-pytorch` and the official **Pascal VOC 2012** train/validation split.
+A reproducible semantic-segmentation reference pipeline for **Pascal VOC 2012** using U-Net, DeepLabV3+, or FPN from `segmentation-models-pytorch`.
 
-> **Scope and honesty.** The default task is *VOC foreground/background segmentation*: VOC classes 1–20 are foreground and class 0 is background. It is **not an industrial-defect or crack-segmentation model**. The VOC void label (255) is preserved and excluded from loss and metrics. No model checkpoint or headline accuracy is committed to this repository; reproduce an experiment before reporting results.
+> **Protocol first.** Development model selection, early stopping, and scheduler decisions use a deterministic validation split derived only from official Pascal VOC `train`. The labeled official VOC `val` split is held out until one final evaluation. Raw data and model weights are never committed; any published result must include its configuration, split manifest, code commit, environment metadata, and artifact hashes.
 
-## Why this revision
+## Why this revision exists
 
-The project is structured to be useful in a hiring review:
+The earlier pipeline used the official VOC validation split both to select a checkpoint and to report its final score. That makes the score useful for development but not an untouched final estimate. The current protocol makes the distinction explicit:
 
-- an explicit task/data card rather than a vague “production-ready” claim;
-- an official train/validation split, with no validation augmentation;
-- void-aware Dice + cross-entropy loss and dataset-level (not batch-averaged) mIoU/Dice metrics;
-- self-describing checkpoints that contain model and dataset metadata;
-- a FastAPI service that returns **503** instead of random, untrained predictions when no checkpoint exists;
-- deterministic seeding, unit tests, CI, Docker, and a configurable smoke test.
+1. split the official `train` identifiers deterministically into development train and development validation;
+2. select the checkpoint only with development-validation mIoU;
+3. evaluate the selected checkpoint only after selection on the untouched official `val` identifiers.
 
+Other guarantees:
+
+- Pascal VOC void pixels (`255`) remain void and are excluded from loss and metrics;
+- metrics are accumulated from one dataset-level confusion matrix, not batch averages;
+- checkpoints store model, protocol, split-count, task, and image-size metadata;
+- evaluation rejects legacy checkpoints without held-out-protocol metadata;
+- inference returns HTTP `503` when no valid local checkpoint exists;
+- dashboards are generated only from recorded training history and held-out metrics.
 
 ## Visual overview
 
-![Current v2 protocol](assets/pipeline-protocol.svg)
+![Current v3 protocol](assets/pipeline-protocol.svg)
 
-The diagram above describes the **current v2 code and evidence contract**. It makes no performance claim and remains valid before a model is trained.
+The diagram describes the current split-integrity workflow. It is a protocol visual, not a performance claim.
 
 <details>
 <summary><strong>Archived v1 visual gallery — qualitative context only</strong></summary>
 
-These are genuine visuals retained from the pre-v2 repository. They remain useful for understanding the former exploration and qualitative predictions, but their metrics are **not** current v2 results because the v2 evaluation protocol and void handling changed. See [`assets/legacy-v1/README.md`](assets/legacy-v1/README.md).
+These are genuine visuals retained from the pre-v2 repository. They remain useful qualitative context, but their numerical annotations are **not** current v3 results because void handling and evaluation protocol changed. See [`assets/legacy-v1/README.md`](assets/legacy-v1/README.md).
 
 ![Archived v1 prediction snapshot](assets/legacy-v1/prediction_dashboard_real.png)
 
@@ -36,26 +41,28 @@ These are genuine visuals retained from the pre-v2 repository. They remain usefu
 
 </details>
 
-A current, reportable gallery is produced after a recorded v2 run from the checkpoint, configuration, data provenance, and evaluation artifacts.
+A current, reportable dashboard is generated only after a recorded v3 run from its configuration, split manifest, checkpoint metadata, training history, and one final official-validation evaluation.
 
 ## Data card
 
 | Item | Value |
 | --- | --- |
 | Dataset | [Pascal VOC 2012](http://host.robots.ox.ac.uk/pascal/VOC/) segmentation |
-| Split | Official `train` and `val` ImageSets |
-| Default task | Binary foreground/background (all object classes merged) |
-| Alternative task | `voc_multiclass` with `model.num_classes: 21` |
-| Void pixels | Original `255`; ignored in loss and all metrics |
+| Development data | Official `train`, deterministically split into train and development validation |
+| Final evaluation data | Official labeled `val`, untouched during model selection |
+| Default task | Binary foreground/background: VOC classes 1–20 merged as foreground |
+| Alternative task | Native `voc_multiclass` with `model.num_classes: 21` |
+| Void pixels | Original `255`; ignored in loss and every metric |
+| Primary selection metric | Development-validation mean IoU |
 | Data location | `data/` (ignored by Git) |
 | Intended use | Learning, evaluation, and a maintainable engineering reference |
-| Not intended for | Medical, safety, industrial inspection, or other deployment without task-specific data, validation, monitoring, and governance |
+| Not intended for | Medical, safety, industrial inspection, or deployment without task-specific validation, monitoring, and governance |
 
-Pascal VOC has its own terms; review them before use. This repository’s MIT license does not relicence the dataset.
+Pascal VOC has its own terms; review them before use. This repository's MIT code license does not relicense the dataset.
 
 ## Setup
 
-Python **3.10–3.12** is recommended. Install an appropriate matching PyTorch/torchvision pair from the [official PyTorch selector](https://pytorch.org/get-started/locally/) first. For a CPU-only Linux environment tested by the Dockerfile:
+Python **3.10–3.12** is recommended. Install an appropriate matching PyTorch/torchvision build from the [official PyTorch selector](https://pytorch.org/get-started/locally/) before project dependencies. A CPU-only example:
 
 ```bash
 python -m venv .venv
@@ -63,44 +70,59 @@ python -m venv .venv
 # macOS/Linux: source .venv/bin/activate
 python -m pip install --upgrade pip
 pip install torch==2.6.0 torchvision==0.21.0 --index-url https://download.pytorch.org/whl/cpu
-pip install -r requirements.txt
+pip install -r requirements-dev.txt
 ```
 
-Download data explicitly (about 2 GB) rather than triggering a hidden transfer during training:
+Download the data explicitly (about 2 GB) rather than hiding a transfer inside training:
 
 ```bash
 python -m src.download_data
 ```
 
-## Train and evaluate
+## Train, evaluate, and report
 
-The default `config.yaml` uses the entire official split. It can be expensive on CPU.
+The default config uses the entire official source split and can be expensive on CPU.
 
 ```bash
-# Full experiment from config.yaml
+# Train from official VOC train only and select only on development validation.
 python -m src.train --config config.yaml
 
-# Fast wiring check: 16 train / 8 validation samples and 1 epoch
+# Fast wiring check only: small subsets, one epoch, and not reportable.
 python -m src.train --config config.yaml --smoke-test
 
-# Evaluate the saved best checkpoint and write reports/evaluation_metrics.json
+# Once configuration/checkpoint selection are final, evaluate official VOC val once.
 python -m src.evaluate --config config.yaml --checkpoint checkpoints/best.pt
+
+# Create a dashboard only from those real experiment artifacts.
+python -m src.reporting
 ```
 
 Training writes:
 
 ```text
 checkpoints/
-├── best.pt                 # best validation mIoU, self-describing metadata
+├── best.pt                  # selected by development-validation mIoU
 ├── last.pt
+├── split_manifest.json      # exact development and held-out identifiers
 └── training_history.json
 ```
 
-These outputs are ignored by Git. Record the commit SHA, complete config, environment, seed, hardware, training duration, and validation metrics when publishing an experiment. Do not compare scores obtained from different subsets, resolutions, or task definitions.
+Evaluation writes `reports/heldout_val_metrics.json`; reporting writes `reports/experiment_dashboard.png`. Both local output paths remain ignored so unrelated runs cannot be accidentally committed. A reportable evidence bundle must contain the matching configuration, split manifest, checkpoint hash, code commit, seed, hardware, dependency versions, and explicit data provenance.
+
+### What to report
+
+Report at least:
+
+- held-out official-validation mIoU and mean Dice;
+- pixel accuracy, per-class IoU/Dice, support, and confusion matrix;
+- development split seed and validation fraction;
+- task definition, image resolution, hardware, run duration, and commit SHA.
+
+Do not call the public VOC validation split an official test set; Pascal VOC test labels are not bundled with the public dataset. Do not compare scores across different task definitions, subsets, resolutions, or preprocessing as if they were the same benchmark.
 
 ### Switch to native 21-class VOC
 
-Change only the task and output channels together:
+Change task and output channels together, then retrain from scratch:
 
 ```yaml
 dataset:
@@ -109,11 +131,11 @@ model:
   num_classes: 21
 ```
 
-Then retrain. A binary checkpoint cannot be used for this task.
+A binary checkpoint cannot be evaluated as native multiclass VOC.
 
-## Serve a trained checkpoint
+## Local API demo
 
-The API does not ship with a checkpoint. Train first, then:
+After training a valid `checkpoints/best.pt`:
 
 ```bash
 uvicorn src.inference:app --host 0.0.0.0 --port 8000
@@ -122,21 +144,21 @@ curl -X POST http://localhost:8000/predict -F "file=@example.jpg" --output mask.
 curl -X POST http://localhost:8000/predict-overlay -F "file=@example.jpg" --output overlay.png
 ```
 
-- `GET /health` reports `model_not_loaded` until `checkpoints/best.pt` exists and `checkpoint_present` afterward.
-- `POST /predict` returns a PNG label mask at the original image size.
-- `POST /predict-overlay` returns a green overlay for non-background labels.
-- Use `CHECKPOINT_PATH=/path/to/model.pt` to select another checkpoint and `MAX_UPLOAD_BYTES` to change the 10 MiB upload limit.
+- `GET /health` reports `model_not_loaded` until a local checkpoint exists.
+- `POST /predict` returns an original-size PNG label mask.
+- `POST /predict-overlay` returns an original-size green overlay for non-background labels.
+- Without a valid held-out-protocol checkpoint, prediction endpoints return HTTP `503` rather than random predictions.
+- `CHECKPOINT_PATH` and `MAX_UPLOAD_BYTES` configure checkpoint location and upload size.
 
-## Quality checks
+## Quality checks and benchmarking
 
 ```bash
-pip install -r requirements-dev.txt
 pytest
 ruff check src tests
 python -m src.benchmark --model unet --encoder resnet18
 ```
 
-The GitHub Actions workflow runs the unit tests on Python 3.11 with the CPU PyTorch build. The tests cover metric arithmetic, void-label exclusion, and config validation; they intentionally do not claim to validate a trained model.
+GitHub Actions runs tests and linting on Python 3.11 with CPU PyTorch for every push and pull request. The benchmark measures the current host only; it is not a portable latency claim.
 
 ## Docker
 
@@ -147,31 +169,30 @@ docker run --rm -p 8000:8000 \
   semantic-segmentation-pipeline
 ```
 
-On Windows PowerShell, replace `$(pwd)` with `${PWD}`. The container health endpoint may be available before the model is trained, but predictions remain unavailable until a valid `best.pt` is mounted.
+On Windows PowerShell, use `${PWD}` in place of `$(pwd)`. The health endpoint remains available without a model, but inference stays unavailable until a valid checkpoint is mounted.
 
-## Project layout
+## Repository layout
 
 ```text
 ├── config.yaml
 ├── src/
-│   ├── data_loader.py       # VOC datasets, transforms, official splits
+│   ├── data_loader.py       # VOC loaders and deterministic development split
 │   ├── models.py            # model factory and void-aware losses
-│   ├── metrics.py           # streaming confusion-matrix metrics
-│   ├── train.py             # reproducible training/checkpointing
-│   ├── evaluate.py          # checkpoint evaluation
-│   ├── inference.py         # safe FastAPI inference service
-│   └── download_data.py
+│   ├── metrics.py           # streaming dataset-level metrics
+│   ├── train.py             # development-only checkpoint selection
+│   ├── evaluate.py          # one final official-VOC-validation evaluation
+│   ├── reporting.py         # dashboard generated from real artifacts
+│   ├── inference.py         # checkpoint-safe FastAPI inference
+│   └── download_data.py     # explicit local dataset download
 ├── tests/
-├── checkpoints/             # local, Git-ignored training artefacts
-├── reports/                 # local, Git-ignored evaluation artefacts
+├── checkpoints/
+├── reports/
 ├── .github/workflows/ci.yml
 ├── Dockerfile
 └── Makefile
 ```
 
-## License and acknowledgement
-
-Code is available under the [MIT License](LICENSE). Cite the original PASCAL VOC work when using the dataset:
+## Citation
 
 ```bibtex
 @article{everingham2010pascal,
