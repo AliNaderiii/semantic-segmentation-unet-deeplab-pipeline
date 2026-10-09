@@ -1,3 +1,12 @@
-# Generated reports
+# Generated experiment artifacts
 
-This directory is deliberately empty in Git. `python -m src.evaluate` writes `evaluation_metrics.json` here after evaluating a real local checkpoint. Commit a small, versioned metrics artifact only when it includes the exact configuration, dataset split, seed, hardware, and commit SHA needed to interpret it.
+`reports/` is intentionally ignored by Git because it is the scratch location for outputs from the current local checkpoint.
+
+After a configuration is final and a validation-selected checkpoint exists, run exactly one final official-VOC-validation evaluation:
+
+```bash
+python -m src.evaluate --checkpoint checkpoints/best.pt --config config.yaml
+python -m src.reporting
+```
+
+This creates `heldout_val_metrics.json` and `experiment_dashboard.png` from the recorded checkpoint, development split manifest, training history, and untouched official VOC `val` split. Do not commit a dashboard or headline score without its exact configuration, split manifest, code commit, seed, hardware, dependency versions, checkpoint hash, and dataset provenance.

@@ -38,4 +38,4 @@ docker-run:
 	docker run --rm -p 8000:8000 -v "$(PWD)/checkpoints:/app/checkpoints:ro" semantic-segmentation-pipeline
 
 clean:
-	rm -rf .pytest_cache .ruff_cache **/__pycache__ reports/evaluation_metrics.json
+	rm -rf .pytest_cache .ruff_cache **/__pycache__ reports/heldout_val_metrics.json reports/experiment_dashboard.png

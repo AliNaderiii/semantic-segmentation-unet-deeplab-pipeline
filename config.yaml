@@ -3,11 +3,16 @@ dataset:
   name: pascal_voc_2012
   root: data
   # binary_foreground maps any VOC object (1-20) to foreground. It is not a
-  # defect dataset. Use voc_multiclass + 21 classes for the native labels.
+  # defect dataset. Use voc_multiclass + 21 classes for native VOC labels.
   task: binary_foreground
   image_size: 256
-  max_train_samples: null  # set e.g. 64 only for a smoke test
-  max_val_samples: null
+  # Development validation is deterministic and comes only from official train.
+  # Official VOC val remains untouched until src.evaluate.
+  validation_fraction: 0.20
+  split_seed: 42
+  # Non-null limits are smoke-test/dev controls, never a reportable full protocol.
+  max_train_samples: null
+  max_test_samples: null
 
 model:
   name: unet                # unet, deeplabv3plus, fpn

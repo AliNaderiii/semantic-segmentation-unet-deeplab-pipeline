@@ -1,8 +1,9 @@
-"""Train a reproducible Pascal VOC foreground or multiclass segmentation model."""
+"""Train Pascal VOC models without using official validation data for selection."""
 from __future__ import annotations
 
 import argparse
 import json
+import platform
 import random
 from copy import deepcopy
 from typing import Any
@@ -12,9 +13,11 @@ import torch
 from tqdm import tqdm
 
 from .config import PROJECT_ROOT, load_config
-from .data_loader import get_dataloaders
+from .data_loader import get_dataloaders, write_split_manifest
 from .metrics import SegmentationMeter
 from .models import CombinedLoss, count_parameters, get_model
+
+PROTOCOL = "development validation derived only from official train; official val held out"
 
 
 def set_seed(seed: int, deterministic: bool = True) -> None:
@@ -37,12 +40,11 @@ def run_epoch(
     num_classes: int,
     optimizer: torch.optim.Optimizer | None = None,
 ) -> tuple[float, dict[str, Any]]:
-    """Run one training or validation epoch and calculate global pixel metrics."""
+    """Run one train or development-validation epoch with global metrics."""
     training = optimizer is not None
     model.train(training)
     meter = SegmentationMeter(num_classes=num_classes)
-    total_loss = 0.0
-    total_images = 0
+    total_loss, total_images = 0.0, 0
 
     context = torch.enable_grad() if training else torch.no_grad()
     with context:
@@ -55,9 +57,8 @@ def run_epoch(
             if training:
                 loss.backward()
                 optimizer.step()
-            batch_size = images.shape[0]
-            total_loss += float(loss.detach().item()) * batch_size
-            total_images += batch_size
+            total_loss += float(loss.detach().item()) * images.shape[0]
+            total_images += images.shape[0]
             meter.update(logits, masks)
 
     if total_images == 0:
@@ -65,27 +66,36 @@ def run_epoch(
     return total_loss / total_images, meter.compute()
 
 
-def _checkpoint_payload(
+def checkpoint_payload(
     model: torch.nn.Module,
     config: dict[str, Any],
+    split_manifest: dict[str, Any],
     epoch: int,
-    metrics: dict[str, Any],
+    validation_metrics: dict[str, Any],
 ) -> dict[str, Any]:
+    """Build a checkpoint that evaluate.py can reject when protocol metadata is absent."""
     return {
-        "format_version": 1,
+        "format_version": 2,
         "model_state_dict": model.state_dict(),
         "model": deepcopy(config["model"]),
         "dataset": {
+            "name": "Pascal VOC 2012",
             "task": config["dataset"]["task"],
             "image_size": config["dataset"]["image_size"],
+            "validation_fraction": config["dataset"]["validation_fraction"],
+            "split_seed": config["dataset"]["split_seed"],
+            "protocol": PROTOCOL,
+        },
+        "split_counts": {
+            key: len(split_manifest[f"{key}_ids"]) for key in ("train", "validation", "test")
         },
         "epoch": epoch,
-        "validation_metrics": metrics,
+        "validation_metrics": validation_metrics,
     }
 
 
 def train(config: dict[str, Any], allow_download: bool = False) -> dict[str, Any]:
-    """Train from a validated configuration and save self-describing checkpoints."""
+    """Train and select only on deterministic development validation data."""
     runtime = config["runtime"]
     training = config["training"]
     dataset = config["dataset"]
@@ -94,31 +104,40 @@ def train(config: dict[str, Any], allow_download: bool = False) -> dict[str, Any
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Device: {device}")
-    train_loader, val_loader = get_dataloaders(
+    loaders, split_manifest = get_dataloaders(
         batch_size=int(training["batch_size"]),
         image_size=int(dataset["image_size"]),
         task=dataset["task"],
         data_root=PROJECT_ROOT / dataset["root"],
+        validation_fraction=float(dataset["validation_fraction"]),
+        split_seed=int(dataset["split_seed"]),
         num_workers=int(runtime["num_workers"]),
         max_train_samples=dataset.get("max_train_samples"),
-        max_val_samples=dataset.get("max_val_samples"),
+        max_test_samples=dataset.get("max_test_samples"),
         download=allow_download,
-        seed=int(runtime["seed"]),
     )
+    checkpoint_dir = PROJECT_ROOT / "checkpoints"
+    checkpoint_dir.mkdir(exist_ok=True)
+    write_split_manifest(split_manifest, checkpoint_dir / "split_manifest.json")
+
     model = get_model(
         model_name=model_config["name"],
         encoder=model_config["encoder"],
         num_classes=int(model_config["num_classes"]),
         pretrained=bool(model_config["pretrained"]),
     ).to(device)
-    print(f"Model: {model_config['name']} / {model_config['encoder']} / {count_parameters(model):.2f}M parameters")
-
+    print(
+        f"Model: {model_config['name']} / {model_config['encoder']} / "
+        f"{count_parameters(model):.2f}M parameters"
+    )
     criterion = CombinedLoss(
         dice_weight=float(training["loss_dice_weight"]),
         ce_weight=float(training["loss_ce_weight"]),
     )
     optimizer = torch.optim.AdamW(
-        model.parameters(), lr=float(training["learning_rate"]), weight_decay=float(training["weight_decay"])
+        model.parameters(),
+        lr=float(training["learning_rate"]),
+        weight_decay=float(training["weight_decay"]),
     )
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
         optimizer,
@@ -127,48 +146,64 @@ def train(config: dict[str, Any], allow_download: bool = False) -> dict[str, Any
         patience=int(training["scheduler_patience"]),
     )
 
-    checkpoint_dir = PROJECT_ROOT / "checkpoints"
-    checkpoint_dir.mkdir(exist_ok=True)
     history: list[dict[str, Any]] = []
     best_iou, epochs_without_improvement = float("-inf"), 0
-
     for epoch in range(1, int(training["epochs"]) + 1):
         train_loss, train_metrics = run_epoch(
-            model, train_loader, criterion, device, int(model_config["num_classes"]), optimizer
+            model, loaders["train"], criterion, device, int(model_config["num_classes"]), optimizer
         )
-        val_loss, val_metrics = run_epoch(
-            model, val_loader, criterion, device, int(model_config["num_classes"])
+        validation_loss, validation_metrics = run_epoch(
+            model, loaders["validation"], criterion, device, int(model_config["num_classes"])
         )
-        scheduler.step(val_metrics["mean_iou"])
+        scheduler.step(validation_metrics["mean_iou"])
         record = {
             "epoch": epoch,
             "learning_rate": optimizer.param_groups[0]["lr"],
             "train_loss": train_loss,
-            "validation_loss": val_loss,
+            "validation_loss": validation_loss,
             "train": train_metrics,
-            "validation": val_metrics,
+            "validation": validation_metrics,
         }
         history.append(record)
         print(
             f"Epoch {epoch:03d} | train loss={train_loss:.4f}, mIoU={train_metrics['mean_iou']:.4f} "
-            f"| val loss={val_loss:.4f}, mIoU={val_metrics['mean_iou']:.4f}, "
-            f"Dice={val_metrics['mean_dice']:.4f}"
+            f"| dev-val loss={validation_loss:.4f}, mIoU={validation_metrics['mean_iou']:.4f}, "
+            f"Dice={validation_metrics['mean_dice']:.4f}"
         )
 
-        if val_metrics["mean_iou"] > best_iou:
-            best_iou = val_metrics["mean_iou"]
+        if validation_metrics["mean_iou"] > best_iou:
+            best_iou = validation_metrics["mean_iou"]
             epochs_without_improvement = 0
-            torch.save(_checkpoint_payload(model, config, epoch, val_metrics), checkpoint_dir / "best.pt")
+            torch.save(
+                checkpoint_payload(model, config, split_manifest, epoch, validation_metrics),
+                checkpoint_dir / "best.pt",
+            )
         else:
             epochs_without_improvement += 1
         if epochs_without_improvement >= int(training["early_stopping_patience"]):
-            print("Early stopping: validation mIoU did not improve.")
+            print("Early stopping: development validation mIoU did not improve.")
             break
 
-    torch.save(_checkpoint_payload(model, config, history[-1]["epoch"], history[-1]["validation"]), checkpoint_dir / "last.pt")
-    summary = {"best_validation_miou": best_iou, "history": history}
-    with (checkpoint_dir / "training_history.json").open("w", encoding="utf-8") as handle:
-        json.dump(summary, handle, indent=2)
+    last_record = history[-1]
+    torch.save(
+        checkpoint_payload(
+            model, config, split_manifest, int(last_record["epoch"]), last_record["validation"]
+        ),
+        checkpoint_dir / "last.pt",
+    )
+    summary = {
+        "protocol": "official VOC validation split was not iterated for model selection or scheduler decisions",
+        "best_validation_miou": best_iou,
+        "environment": {
+            "python": platform.python_version(),
+            "torch": torch.__version__,
+            "device": str(device),
+        },
+        "history": history,
+    }
+    (checkpoint_dir / "training_history.json").write_text(
+        json.dumps(summary, indent=2), encoding="utf-8"
+    )
     return summary
 
 
@@ -178,10 +213,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--download-data",
         action="store_true",
-        help="Download Pascal VOC if it is absent (roughly 2 GB).",
+        help="Download Pascal VOC if absent (roughly 2 GB). Prefer src.download_data explicitly.",
     )
     parser.add_argument(
-        "--smoke-test", action="store_true", help="Override config with a small, fast training run."
+        "--smoke-test", action="store_true", help="Override config with small, non-reportable subsets."
     )
     return parser.parse_args()
 
@@ -191,7 +226,9 @@ if __name__ == "__main__":
     configuration = load_config(args.config)
     if args.smoke_test:
         configuration = deepcopy(configuration)
-        configuration["dataset"].update({"max_train_samples": 16, "max_val_samples": 8, "image_size": 128})
+        configuration["dataset"].update(
+            {"max_train_samples": 16, "max_test_samples": 8, "image_size": 128}
+        )
         configuration["training"].update({"epochs": 1, "batch_size": 2})
     result = train(configuration, allow_download=args.download_data)
     print(json.dumps({"best_validation_miou": result["best_validation_miou"]}, indent=2))

@@ -1,5 +1,22 @@
 # Changelog
 
+## 3.0.0 — held-out Pascal VOC evaluation protocol
+
+### Scientific validity
+
+- Reserved the public, labeled Pascal VOC `val` split for one final evaluation only.
+- Added a deterministic development train/validation split derived exclusively from official VOC `train` identifiers.
+- Made development-validation mIoU the only checkpoint-selection, scheduler, and early-stopping metric.
+- Persisted an exact train/development-validation/held-out identifier manifest with checkpoints and training history.
+- Made evaluation reject legacy checkpoints that lack current held-out-protocol metadata.
+- Clarified that public VOC `val` is a held-out evaluation split, not the inaccessible official challenge test set.
+
+### Engineering and presentation
+
+- Added artifact-derived reporting for losses, development mIoU curves, and a held-out confusion matrix.
+- Updated the protocol diagram, README, visual policy, and generated-artifact guidance to remove ambiguous evaluation claims.
+- Preserved void-aware loss and dataset-level streaming metrics, safe inference behavior, CI, and Docker support.
+
 ## 2.0.0 — portfolio reliability revision
 
 ### Correctness

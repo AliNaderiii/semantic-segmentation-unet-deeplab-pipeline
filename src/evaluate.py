@@ -1,4 +1,4 @@
-"""Evaluate a saved checkpoint on Pascal VOC's official validation split."""
+"""Evaluate a validation-selected Pascal VOC checkpoint on untouched official validation data."""
 from __future__ import annotations
 
 import argparse
@@ -13,18 +13,22 @@ from .config import PROJECT_ROOT, load_config
 from .data_loader import get_dataloaders
 from .metrics import SegmentationMeter
 from .models import get_model
+from .train import PROTOCOL
 
 
 def load_checkpoint(checkpoint_path: str | Path, device: torch.device) -> tuple[torch.nn.Module, dict[str, Any]]:
+    """Load only checkpoints written by the held-out protocol-aware trainer."""
     payload = torch.load(checkpoint_path, map_location=device, weights_only=False)
-    required = {"model_state_dict", "model", "dataset"}
+    required = {"model_state_dict", "model", "dataset", "split_counts", "epoch"}
     if not isinstance(payload, dict) or not required.issubset(payload):
-        raise ValueError("Checkpoint is not a supported self-describing checkpoint.")
-    metadata = payload["model"]
+        raise ValueError("Unsupported checkpoint. Train it with the current held-out protocol first.")
+    if payload.get("format_version") != 2 or payload["dataset"].get("protocol") != PROTOCOL:
+        raise ValueError("Checkpoint lacks the current held-out validation protocol metadata.")
+    model_spec = payload["model"]
     model = get_model(
-        model_name=metadata["name"],
-        encoder=metadata["encoder"],
-        num_classes=int(metadata["num_classes"]),
+        model_name=model_spec["name"],
+        encoder=model_spec["encoder"],
+        num_classes=int(model_spec["num_classes"]),
         pretrained=False,
     )
     model.load_state_dict(payload["model_state_dict"])
@@ -32,31 +36,53 @@ def load_checkpoint(checkpoint_path: str | Path, device: torch.device) -> tuple[
 
 
 @torch.no_grad()
-def evaluate(checkpoint_path: str | Path, config_path: str | Path = "config.yaml") -> dict[str, Any]:
+def evaluate_heldout_validation(
+    checkpoint_path: str | Path, config_path: str | Path = "config.yaml"
+) -> dict[str, Any]:
+    """Evaluate only Pascal VOC's untouched official ``val`` split."""
     config = load_config(config_path)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model, payload = load_checkpoint(checkpoint_path, device)
-    metadata = payload["model"]
-    if metadata["num_classes"] != config["model"]["num_classes"]:
-        raise ValueError("The checkpoint and config use different numbers of classes.")
-    if payload["dataset"]["task"] != config["dataset"]["task"]:
-        raise ValueError("The checkpoint and config use different segmentation tasks.")
+    model_spec = payload["model"]
+    dataset_spec = payload["dataset"]
+    if model_spec["num_classes"] != config["model"]["num_classes"]:
+        raise ValueError("Checkpoint and config disagree about class count")
+    if dataset_spec["task"] != config["dataset"]["task"]:
+        raise ValueError("Checkpoint and config disagree about segmentation task")
+    if dataset_spec["validation_fraction"] != config["dataset"]["validation_fraction"]:
+        raise ValueError("Checkpoint and config disagree about development validation fraction")
+    if dataset_spec["split_seed"] != config["dataset"]["split_seed"]:
+        raise ValueError("Checkpoint and config disagree about split seed")
 
-    _, loader = get_dataloaders(
+    loaders, manifest = get_dataloaders(
         batch_size=int(config["training"]["batch_size"]),
-        image_size=int(payload["dataset"]["image_size"]),
+        image_size=int(dataset_spec["image_size"]),
         task=config["dataset"]["task"],
         data_root=PROJECT_ROOT / config["dataset"]["root"],
+        validation_fraction=float(config["dataset"]["validation_fraction"]),
+        split_seed=int(config["dataset"]["split_seed"]),
         num_workers=int(config["runtime"]["num_workers"]),
-        max_val_samples=config["dataset"].get("max_val_samples"),
+        max_train_samples=config["dataset"].get("max_train_samples"),
+        max_test_samples=config["dataset"].get("max_test_samples"),
         download=False,
-        seed=int(config["runtime"]["seed"]),
     )
-    meter = SegmentationMeter(num_classes=int(metadata["num_classes"]))
-    for images, targets in tqdm(loader, desc="evaluate"):
+    current_counts = {key: len(manifest[f"{key}_ids"]) for key in ("train", "validation", "test")}
+    if payload["split_counts"] != current_counts:
+        raise ValueError("Checkpoint split counts do not match the current data/configuration")
+
+    meter = SegmentationMeter(num_classes=int(model_spec["num_classes"]))
+    for images, targets in tqdm(loaders["test"], desc="held-out official VOC val"):
         meter.update(model(images.to(device)), targets.to(device))
     results = meter.compute()
-    results.update({"checkpoint": str(checkpoint_path), "task": config["dataset"]["task"]})
+    results.update(
+        {
+            "split": "official_voc_val_held_out",
+            "checkpoint": str(checkpoint_path),
+            "protocol": PROTOCOL,
+            "split_counts": payload["split_counts"],
+            "current_manifest_counts": current_counts,
+        }
+    )
     return results
 
 
@@ -65,8 +91,8 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint", default="checkpoints/best.pt")
     parser.add_argument("--config", default="config.yaml")
     args = parser.parse_args()
-    metrics = evaluate(args.checkpoint, args.config)
-    output_path = PROJECT_ROOT / "reports" / "evaluation_metrics.json"
-    output_path.parent.mkdir(exist_ok=True)
-    output_path.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    metrics = evaluate_heldout_validation(args.checkpoint, args.config)
+    output = PROJECT_ROOT / "reports" / "heldout_val_metrics.json"
+    output.parent.mkdir(exist_ok=True)
+    output.write_text(json.dumps(metrics, indent=2), encoding="utf-8")
     print(json.dumps(metrics, indent=2))
