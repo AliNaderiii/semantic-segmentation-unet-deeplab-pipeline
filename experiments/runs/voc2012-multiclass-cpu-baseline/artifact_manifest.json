@@ -1,0 +1,33 @@
+{
+  "checkpoint_weights_published": false,
+  "code_commit_used_for_training": "bfa45995a712dc853415783bb24b80a0233e94c3",
+  "configuration": {
+    "path": "experiments/configs/voc2012_multiclass_cpu_baseline.yaml",
+    "sha256": "3ceae8bb7dac72deba12aace60cac6f2d5ba9804d3203695a24ede795b0ecab6"
+  },
+  "held_out_official_voc_validation": {
+    "count": 1449,
+    "evaluation_executions_recorded": 1,
+    "metrics_sha256": "665204f004e121d1e7ceae447cb40cacb2776b841a2124367234e68f4a70db3d",
+    "split": "official_voc_val_held_out"
+  },
+  "local_selected_checkpoint_not_published": {
+    "path_at_recording": "checkpoints/best.pt",
+    "selection_epoch": 9,
+    "selection_metric": "development validation mean IoU",
+    "selection_metric_value": 0.10301225735839317,
+    "sha256": "ab10e2142b25372ee1f2bdfa29518e1c805e125e0d1bbe7def1826e729bd091d"
+  },
+  "published_dashboard": {
+    "path": "assets/experiments/voc2012_multiclass_cpu_baseline_dashboard.png",
+    "sha256": "cef356a10e552f61baaada4cdc523e275b4ecd43750fa657e97e4b6b287201dc"
+  },
+  "raw_data_published": false,
+  "recorded_at_local": "2026-10-09",
+  "recorded_wall_clock_seconds": {
+    "official_voc_val_evaluation": 126.9622332,
+    "training_command": 1225.9673259
+  },
+  "run_slug": "voc2012-multiclass-cpu-baseline",
+  "schema_version": 1
+}

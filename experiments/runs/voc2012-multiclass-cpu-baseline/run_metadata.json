@@ -1,0 +1,9 @@
+﻿{
+    "code_commit":  "bfa45995a712dc853415783bb24b80a0233e94c3",
+    "config_path":  "experiments/configs/voc2012_multiclass_cpu_baseline.yaml",
+    "started_at":  "2026-10-09T10:46:15.3651227+01:00",
+    "task":  "voc_multiclass",
+    "device":  "CPU",
+    "cpu_threads":  8,
+    "torch_version":  "2.6.0+cpu"
+}

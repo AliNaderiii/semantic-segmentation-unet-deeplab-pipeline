@@ -1,5 +1,13 @@
 # Changelog
 
+
+## 3.1.0 — recorded Pascal VOC multiclass CPU baseline
+
+- Added a real held-out-protocol Pascal VOC experiment: native 21-class task, U-Net / pretrained ResNet-18, 128 × 128, seed 42, and a 1,171/293 development split from official train only.
+- Selected epoch 9 exclusively by development-validation mIoU (`0.103012`), then evaluated the untouched 1,449-image official VOC validation split once.
+- Recorded held-out mIoU `0.099281`, mean Dice `0.134228`, mean precision `0.274585`, and mean recall `0.170493`.
+- Versioned a real dashboard and safe provenance artifacts while continuing to exclude raw Pascal VOC data and checkpoint weights.
+
 ## 3.0.0 — held-out Pascal VOC evaluation protocol
 
 ### Scientific validity
